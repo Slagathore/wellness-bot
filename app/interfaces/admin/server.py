@@ -336,6 +336,7 @@ class ModelUpdateRequest(BaseModel):
     chat_model: Optional[str] = None
     embed_model: Optional[str] = None
     vision_model: Optional[str] = None
+    planner_model: Optional[str] = None
 
 
 def _update_env_setting(key: str, value: str) -> None:
@@ -365,6 +366,7 @@ async def get_models(admin: str = Depends(_require_admin)) -> Dict[str, Any]:
         "chat_model": cfg.chat_model,
         "embed_model": cfg.embed_model,
         "vision_model": cfg.vision_model,
+        "planner_model": getattr(cfg, "planner_model", None),
         "note": "Updates persist to .env; restart runtime to apply everywhere.",
     }
 
@@ -379,6 +381,8 @@ async def update_models(
         _update_env_setting("EMBED_MODEL", payload.embed_model)
     if payload.vision_model:
         _update_env_setting("VISION_MODEL", payload.vision_model)
+    if payload.planner_model:
+        _update_env_setting("PLANNER_MODEL", payload.planner_model)
     settings.cache_clear()
     cfg = settings()
     live_feed.append("models updated via admin")
@@ -387,8 +391,52 @@ async def update_models(
         "chat_model": cfg.chat_model,
         "embed_model": cfg.embed_model,
         "vision_model": cfg.vision_model,
+        "planner_model": getattr(cfg, "planner_model", None),
         "note": "Persisted to .env; restart runtime to propagate to other processes.",
     }
+
+
+@app.get("/planner/shadow", response_class=JSONResponse)
+async def get_planner_shadow(
+    limit: int = 50,
+    _: str = Depends(_require_admin),
+) -> Dict[str, Any]:
+    import json as _json
+    rows_out = []
+    with db_ro() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, user_id, created_at, user_text, plan_json
+            FROM turn_audit_log
+            WHERE plan_json LIKE '%shadow_comparison%'
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    for row in rows:
+        try:
+            plan = _json.loads(row["plan_json"] or "{}")
+        except Exception:
+            plan = {}
+        shadow = plan.get("shadow_comparison")
+        # Skip records where shadow_comparison is null (LLM never ran)
+        if not isinstance(shadow, dict) or not shadow:
+            continue
+        rows_out.append({
+            "id": row["id"],
+            "user_id": row["user_id"],
+            "created_at": row["created_at"],
+            "user_text": (row["user_text"] or "")[:200],
+            "planner_source": plan.get("planner_source"),
+            "heuristic_latency_ms": shadow.get("heuristic_latency_ms"),
+            "llm_latency_ms": shadow.get("llm_latency_ms"),
+            "llm_model": shadow.get("llm_model"),
+            "mismatch_fields": shadow.get("mismatch_fields", []),
+            "heuristic_summary": shadow.get("heuristic_summary", {}),
+            "llm_summary": shadow.get("llm_summary", {}),
+        })
+    return {"rows": rows_out, "count": len(rows_out)}
 
 
 @app.get("/models/ollama", response_class=JSONResponse)
@@ -3683,6 +3731,7 @@ async def landing_page(
     <button class="tab-btn" data-tab="media">Media</button>
     <button class="tab-btn" data-tab="feedback">Bugs/Feedback</button>
     <button class="tab-btn" data-tab="misc">Misc</button>
+    <button class="tab-btn" data-tab="planner-shadow">Planner Shadow</button>
   </nav>
 
   <!-- Tab: Dashboard -->
@@ -3872,6 +3921,14 @@ async def landing_page(
           <select id="model-embed"></select>
           <select id="model-vision"></select>
           <button id="btn-model-save">Save Models</button>
+        </div>
+        <div style="margin-top:10px;">
+          <label style="font-size:12px;color:#94a3b8;">Planner / Sentiment Model (for shadow + sentiment analysis)</label>
+          <div class="grid" style="margin-top:4px;">
+            <input type="text" id="model-planner" placeholder="e.g. mistral-large-3:675b-cloud" style="font-family:monospace;" />
+            <button id="btn-planner-model-save">Save Planner Model</button>
+          </div>
+          <div id="planner-model-result" style="font-size:12px;color:#94a3b8;margin-top:4px;"></div>
         </div>
         <div class="card" style="margin-top:10px;">
           <h3 style="margin-top:0;">Pull Model</h3>
@@ -4109,6 +4166,45 @@ async def landing_page(
       </section>
     </div>
   </div>
+
+  <!-- Tab: Planner Shadow -->
+  <div class="tab-content" id="tab-planner-shadow">
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px;">
+      <button id="btn-shadow-refresh">Refresh</button>
+      <label style="font-size:12px;color:#94a3b8;">Limit:</label>
+      <input type="number" id="shadow-limit" value="50" style="width:70px;" />
+    </div>
+    <section>
+      <h2>Recent Shadow Comparisons</h2>
+      <div style="overflow-x:auto;">
+        <table id="shadow-table" style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead>
+            <tr style="border-bottom:1px solid #374151;text-align:left;">
+              <th style="padding:6px 8px;">Time</th>
+              <th style="padding:6px 8px;">User</th>
+              <th style="padding:6px 8px;">Message</th>
+              <th style="padding:6px 8px;">H-ms</th>
+              <th style="padding:6px 8px;">LLM-ms</th>
+              <th style="padding:6px 8px;">Mismatches</th>
+              <th style="padding:6px 8px;">Source</th>
+            </tr>
+          </thead>
+          <tbody id="shadow-tbody"></tbody>
+        </table>
+      </div>
+    </section>
+    <div class="grid-2col" style="margin-top:16px;" id="shadow-detail" hidden>
+      <section>
+        <h2>Heuristic</h2>
+        <pre id="shadow-heuristic-detail" style="white-space:pre-wrap;font-size:12px;"></pre>
+      </section>
+      <section>
+        <h2>LLM (<span id="shadow-llm-model-label">—</span>)</h2>
+        <pre id="shadow-llm-detail" style="white-space:pre-wrap;font-size:12px;"></pre>
+      </section>
+    </div>
+  </div>
+
   <script>
     // Toast Notification System
     function showToast(message, type = 'info', duration = 4000) {{
@@ -4168,6 +4264,13 @@ async def landing_page(
     const modelPullName = document.getElementById('model-pull-name');
     const modelPullProgress = document.getElementById('model-pull-progress');
     const modelPullStatus = document.getElementById('model-pull-status');
+    const modelPlanner = document.getElementById('model-planner');
+    const plannerModelResult = document.getElementById('planner-model-result');
+    const shadowTbody = document.getElementById('shadow-tbody');
+    const shadowDetail = document.getElementById('shadow-detail');
+    const shadowHeuristicDetail = document.getElementById('shadow-heuristic-detail');
+    const shadowLlmDetail = document.getElementById('shadow-llm-detail');
+    const shadowLlmModelLabel = document.getElementById('shadow-llm-model-label');
     const reminderIdInput = document.getElementById('reminder-id-input');
     const reminderTextInput = document.getElementById('reminder-text-input');
     const reminderTimeInput = document.getElementById('reminder-time-input');
@@ -4201,6 +4304,7 @@ async def landing_page(
       if (targetTab) targetTab.classList.add('active');
       // Update URL hash
       window.location.hash = tabName;
+      if (tabName === 'planner-shadow') loadPlannerShadow();
     }}
 
     // Handle tab button clicks
@@ -4521,7 +4625,27 @@ async def landing_page(
       hydrateModelSelect(modelChat, current.chat_model || '');
       hydrateModelSelect(modelEmbed, current.embed_model || '');
       hydrateModelSelect(modelVision, current.vision_model || '');
+      if (modelPlanner) modelPlanner.value = current.planner_model || '';
       modelResults.textContent = JSON.stringify({{ current, available_count: names.length }}, null, 2);
+    }}
+
+    async function savePlannerModel() {{
+      const val = (modelPlanner && modelPlanner.value || '').trim();
+      if (!val) {{ if (plannerModelResult) plannerModelResult.textContent = 'Enter a model name first.'; return; }}
+      try {{
+        const res = await fetch('/models', {{
+          method: 'POST',
+          headers: {{'Content-Type': 'application/json'}},
+          body: JSON.stringify({{ planner_model: val }})
+        }});
+        const data = await res.json();
+        if (plannerModelResult) plannerModelResult.textContent = res.ok ? `Saved: ${{data.planner_model}}` : `Error: ${{data.detail || res.status}}`;
+        if (res.ok) showToast('Planner model saved! Restart bot to apply.', 'success');
+        else showToast(`Failed: ${{data.detail || res.status}}`, 'error');
+      }} catch (err) {{
+        if (plannerModelResult) plannerModelResult.textContent = `Error: ${{err.message}}`;
+        showToast(`Error: ${{err.message}}`, 'error');
+      }}
     }}
 
     async function saveModels() {{
@@ -4583,6 +4707,61 @@ async def landing_page(
       src.onerror = () => {{
         src.close();
       }};
+    }}
+
+    let _shadowRows = [];
+
+    function _fmtSentiment(summary) {{
+      if (!summary || typeof summary !== 'object') return '(none)';
+      const keys = ['emotion_label','sentiment_priority','sentiment_valence','sentiment_arousal','sentiment_dominance','sentiment_confidence','crisis_risk','needs_rag','needs_live_search_now','allow_reminder_action','scheduled_event','timing_question_ok'];
+      return keys.map(k => `${{k}}: ${{summary[k] !== undefined && summary[k] !== null ? summary[k] : '—'}}`).join('\n');
+    }}
+
+    async function loadPlannerShadow() {{
+      const limit = parseInt((document.getElementById('shadow-limit') && document.getElementById('shadow-limit').value) || '50', 10) || 50;
+      if (shadowTbody) shadowTbody.innerHTML = '<tr><td colspan="7" style="padding:8px;color:#94a3b8;">Loading…</td></tr>';
+      try {{
+        const res = await fetch(`/planner/shadow?limit=${{limit}}`);
+        if (!res.ok) {{ if (shadowTbody) shadowTbody.innerHTML = `<tr><td colspan="7">Error ${{res.status}}</td></tr>`; return; }}
+        const data = await res.json();
+        _shadowRows = data.rows || [];
+        if (!_shadowRows.length) {{
+          if (shadowTbody) shadowTbody.innerHTML = '<tr><td colspan="7" style="padding:8px;color:#94a3b8;">No shadow records yet. Shadow mode requires llm_turn_planner_shadow=true and at least one message to be processed.</td></tr>';
+          return;
+        }}
+        if (shadowTbody) {{
+          shadowTbody.innerHTML = _shadowRows.map((r, i) => {{
+            const mismatches = (r.mismatch_fields || []).join(', ') || 'none';
+            const hMs = r.heuristic_latency_ms !== null && r.heuristic_latency_ms !== undefined ? `${{r.heuristic_latency_ms}}ms` : '—';
+            const lMs = r.llm_latency_ms !== null && r.llm_latency_ms !== undefined ? `${{r.llm_latency_ms}}ms` : '—';
+            const ts = r.created_at ? new Date(r.created_at).toLocaleString() : '—';
+            const msg = (r.user_text || '').slice(0, 80).replace(/</g,'&lt;');
+            const mismatchColor = (r.mismatch_fields || []).length > 0 ? '#f59e0b' : '#10b981';
+            return `<tr data-idx="${{i}}" style="cursor:pointer;border-bottom:1px solid #1f2937;" onmouseover="this.style.background='#1f2937'" onmouseout="this.style.background=''">
+              <td style="padding:6px 8px;">${{ts}}</td>
+              <td style="padding:6px 8px;">${{r.user_id || '—'}}</td>
+              <td style="padding:6px 8px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${{msg}}</td>
+              <td style="padding:6px 8px;">${{hMs}}</td>
+              <td style="padding:6px 8px;">${{lMs}}</td>
+              <td style="padding:6px 8px;color:${{mismatchColor}}">${{mismatches}}</td>
+              <td style="padding:6px 8px;">${{r.planner_source || '—'}}</td>
+            </tr>`;
+          }}).join('');
+          shadowTbody.querySelectorAll('tr[data-idx]').forEach(tr => {{
+            tr.addEventListener('click', () => {{
+              const idx = parseInt(tr.getAttribute('data-idx'), 10);
+              const row = _shadowRows[idx];
+              if (!row) return;
+              if (shadowHeuristicDetail) shadowHeuristicDetail.textContent = _fmtSentiment(row.heuristic_summary);
+              if (shadowLlmDetail) shadowLlmDetail.textContent = _fmtSentiment(row.llm_summary);
+              if (shadowLlmModelLabel) shadowLlmModelLabel.textContent = row.llm_model || '—';
+              if (shadowDetail) shadowDetail.removeAttribute('hidden');
+            }});
+          }});
+        }}
+      }} catch (err) {{
+        if (shadowTbody) shadowTbody.innerHTML = `<tr><td colspan="7">Error: ${{err.message}}</td></tr>`;
+      }}
     }}
 
     async function reminderAction(url, body = {{}}) {{
@@ -4978,6 +5157,8 @@ async def landing_page(
     document.getElementById('btn-feedback-update').onclick = () => updateFeedbackItem();
     document.getElementById('btn-latency-refresh').onclick = () => loadLatencyLive();
     document.getElementById('btn-model-save').onclick = () => saveModels();
+    document.getElementById('btn-planner-model-save').onclick = () => savePlannerModel();
+    document.getElementById('btn-shadow-refresh').onclick = () => loadPlannerShadow();
     document.getElementById('model-chat').addEventListener('focus', loadModels);
     document.getElementById('model-embed').addEventListener('focus', loadModels);
     document.getElementById('model-vision').addEventListener('focus', loadModels);

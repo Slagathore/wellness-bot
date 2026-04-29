@@ -144,6 +144,9 @@ function switchTab(tabName) {
     if (tabName === "reminders") {
       loadUserNames();
     }
+    if (tabName === "planner-shadow") {
+      loadPlannerShadow();
+    }
     if (tabName === "memory") {
       loadUserNames();
     }
@@ -3478,6 +3481,8 @@ async function loadModels() {
     hydrateModelSelect("model-embed", current.embed_model || "");
     hydrateModelSelect("model-vision", current.vision_model || "");
 
+    hydrateModelSelect("model-planner", current.planner_model || "");
+
     const el = document.getElementById("model-results");
     if (el)
       el.textContent = JSON.stringify(
@@ -3511,6 +3516,106 @@ async function saveModels() {
     } else showToast(`Failed: ${data.detail || res.status}`, "error");
   } catch (e) {
     showToast(`Error: ${e.message}`, "error");
+  }
+}
+
+async function savePlannerModel() {
+  const val = (document.getElementById("model-planner")?.value || "").trim();
+  const resultEl = document.getElementById("planner-model-result");
+  if (!val) {
+    if (resultEl) resultEl.textContent = "Enter a model name first.";
+    return;
+  }
+  try {
+    const res = await fetch("/models", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ planner_model: val }),
+    });
+    const data = await res.json();
+    if (resultEl) resultEl.textContent = res.ok ? `Saved: ${data.planner_model}` : `Error: ${data.detail || res.status}`;
+    if (res.ok) showToast("Planner model saved! Restart bot to apply.", "success");
+    else showToast(`Failed: ${data.detail || res.status}`, "error");
+  } catch (e) {
+    if (resultEl) resultEl.textContent = `Error: ${e.message}`;
+    showToast(`Error: ${e.message}`, "error");
+  }
+}
+
+let _shadowRows = [];
+
+function _fmtSentiment(summary) {
+  if (!summary || typeof summary !== "object") return "(none)";
+  // Keys that actually live in heuristic_summary / llm_summary
+  const keys = [
+    "primary_intent", "sentiment_priority", "emotion_label",
+    "crisis_risk", "scheduled_event", "timing_question_ok",
+    "allow_reminder_action", "allow_media_action",
+    "needs_rag", "needs_live_search_now", "needs_live_search_followup",
+    "clarification_required", "clarification_text",
+    "search_query", "search_reason",
+  ];
+  return keys.map((k) => {
+    const v = summary[k];
+    return `${k}: ${v !== undefined && v !== null ? v : "—"}`;
+  }).join("\n");
+}
+
+async function loadPlannerShadow() {
+  const limit = parseInt(document.getElementById("shadow-limit")?.value || "50", 10) || 50;
+  const tbody = document.getElementById("shadow-tbody");
+  if (tbody) tbody.innerHTML = '<tr><td colspan="7" style="padding:8px;color:#94a3b8;">Loading…</td></tr>';
+  try {
+    const res = await fetch(`/planner/shadow?limit=${limit}`);
+    if (!res.ok) {
+      if (tbody) tbody.innerHTML = `<tr><td colspan="7">Error ${res.status}</td></tr>`;
+      return;
+    }
+    const data = await res.json();
+    _shadowRows = data.rows || [];
+    if (!_shadowRows.length) {
+      if (tbody) tbody.innerHTML = '<tr><td colspan="7" style="padding:8px;color:#94a3b8;">No shadow records yet — shadow mode needs llm_turn_planner_shadow=true and at least one processed message.</td></tr>';
+      return;
+    }
+    if (tbody) {
+      tbody.innerHTML = _shadowRows.map((r, i) => {
+        const mismatches = (r.mismatch_fields || []).join(", ") || "none";
+        const hMs = r.heuristic_latency_ms != null ? `${r.heuristic_latency_ms}ms` : "—";
+        const lMs = r.llm_latency_ms != null ? `${r.llm_latency_ms}ms` : "—";
+        const ts = r.created_at ? new Date(r.created_at).toLocaleString() : "—";
+        const msg = (r.user_text || "").slice(0, 80).replace(/</g, "&lt;");
+        const mismatchColor = (r.mismatch_fields || []).length > 0 ? "#f59e0b" : "#10b981";
+        return `<tr data-idx="${i}" style="cursor:pointer;border-bottom:1px solid #1f2937;">
+          <td style="padding:6px 8px;">${ts}</td>
+          <td style="padding:6px 8px;">${r.user_id || "—"}</td>
+          <td style="padding:6px 8px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${msg}</td>
+          <td style="padding:6px 8px;">${hMs}</td>
+          <td style="padding:6px 8px;">${lMs}</td>
+          <td style="padding:6px 8px;color:${mismatchColor}">${mismatches}</td>
+          <td style="padding:6px 8px;">${r.planner_source || "—"}</td>
+        </tr>`;
+      }).join("");
+      tbody.querySelectorAll("tr[data-idx]").forEach((tr) => {
+        tr.addEventListener("click", () => {
+          // Clear previous selection
+          tbody.querySelectorAll("tr[data-idx]").forEach((r) => r.style.background = "");
+          tr.style.background = "#1e3a5f";
+          const row = _shadowRows[parseInt(tr.dataset.idx, 10)];
+          if (!row) return;
+          const detail = document.getElementById("shadow-detail");
+          const hEl = document.getElementById("shadow-heuristic-detail");
+          const lEl = document.getElementById("shadow-llm-detail");
+          const modelLabel = document.getElementById("shadow-llm-model-label");
+          if (hEl) hEl.textContent = _fmtSentiment(row.heuristic_summary);
+          if (lEl) lEl.textContent = _fmtSentiment(row.llm_summary);
+          if (modelLabel) modelLabel.textContent = row.llm_model || "—";
+          if (detail) detail.style.display = "";
+          detail && detail.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+      });
+    }
+  } catch (e) {
+    if (tbody) tbody.innerHTML = `<tr><td colspan="7">Error: ${e.message}</td></tr>`;
   }
 }
 
@@ -4809,6 +4914,12 @@ function wireEvents() {
   document
     .getElementById("btn-model-pull")
     ?.addEventListener("click", pullModel);
+  document
+    .getElementById("btn-planner-model-save")
+    ?.addEventListener("click", savePlannerModel);
+  document
+    .getElementById("btn-shadow-refresh")
+    ?.addEventListener("click", loadPlannerShadow);
   // Models are loaded on page init; no need for click/focus reloads
   // (those would overwrite user's in-progress selection)
 
