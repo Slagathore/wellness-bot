@@ -7,6 +7,17 @@ import os
 from threading import RLock
 from typing import Dict
 
+# Pydantic settings reads .env for known fields but does not push values into
+# os.environ. APP_FEATURE_FLAGS is read directly via os.getenv below, so we
+# must load .env into the process env. load_dotenv() will not overwrite vars
+# that are already set by the OS, so this is safe.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except Exception:
+    pass
+
 from app.config import settings
 
 _DEFAULT_FLAGS: Dict[str, bool] = {

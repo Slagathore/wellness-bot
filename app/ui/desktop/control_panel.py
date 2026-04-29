@@ -114,6 +114,7 @@ class ControlPanelUI:
         self._create_psych_tab()
         self._create_admin_console_tab()
         self._create_settings_tab()
+        self._create_planner_shadow_tab()
         self._create_gpu_tab()
 
     def _create_notebook(self, root: tk.Misc):
@@ -4935,16 +4936,35 @@ class ControlPanelUI:
         ).grid(row=1, column=2, padx=5)
 
         tk.Label(
-            settings_frame, text="Admin Username:", font=("Arial", 10, "bold")
+            settings_frame, text="Planner / Sentiment Model:", font=("Arial", 10, "bold")
         ).grid(row=2, column=0, sticky="w", pady=10)
+        bot.planner_var = tk.StringVar(
+            value=getattr(bot.cfg, "planner_model", None) or ""
+        )
+        tk.Entry(
+            settings_frame,
+            textvariable=bot.planner_var,
+            width=50,
+            font=("Arial", 10),
+        ).grid(row=2, column=1, sticky="w", padx=10)
+        tk.Label(
+            settings_frame,
+            text="(sentiments, turn planner, vision analysis)",
+            font=("Arial", 8),
+            fg="gray",
+        ).grid(row=2, column=2, sticky="w", padx=5)
+
+        tk.Label(
+            settings_frame, text="Admin Username:", font=("Arial", 10, "bold")
+        ).grid(row=3, column=0, sticky="w", pady=10)
         bot.admin_var = tk.StringVar(value=bot.cfg.admin_username)
         tk.Entry(
             settings_frame, textvariable=bot.admin_var, width=50, font=("Arial", 10)
-        ).grid(row=2, column=1, sticky="w", padx=10)
+        ).grid(row=3, column=1, sticky="w", padx=10)
 
         tk.Label(
             settings_frame, text="Your Personality Mode:", font=("Arial", 10, "bold")
-        ).grid(row=3, column=0, sticky="w", pady=10)
+        ).grid(row=4, column=0, sticky="w", pady=10)
         try:
             with db_ro() as conn:
                 admin_user = conn.execute(
@@ -4980,7 +5000,7 @@ class ControlPanelUI:
             font=("Arial", 10),
             state="readonly",
         )
-        bot.personality_combo.grid(row=3, column=1, sticky="w", padx=10)
+        bot.personality_combo.grid(row=4, column=1, sticky="w", padx=10)
 
         def apply_personality():
             if bot.admin_user_id is None:
@@ -5025,7 +5045,7 @@ class ControlPanelUI:
             bg="#27ae60",
             fg="white",
             font=("Arial", 9, "bold"),
-        ).grid(row=3, column=2, padx=5)
+        ).grid(row=4, column=2, padx=5)
 
         tk.Button(
             settings_frame,
@@ -5036,7 +5056,7 @@ class ControlPanelUI:
             font=("Arial", 10, "bold"),
             padx=20,
             pady=10,
-        ).grid(row=4, column=0, columnspan=2, pady=20)
+        ).grid(row=5, column=0, columnspan=2, pady=20)
 
         info_frame = ttk.LabelFrame(scrollable_frame, text="Database Info", padding=20)
         info_frame.pack(fill=tk.X, padx=10, pady=10)
@@ -5228,6 +5248,7 @@ Always validate before advising. Help identify patterns and coping strategies. E
 
             config["chat_model"] = bot.model_var.get()
             config["vision_model"] = bot.vision_var.get()
+            config["planner_model"] = bot.planner_var.get() or None
             config["admin_username"] = bot.admin_var.get()
 
             with open(config_path, "w", encoding="utf-8") as fh:
@@ -5235,6 +5256,8 @@ Always validate before advising. Help identify patterns and coping strategies. E
 
             bot.cfg.chat_model = bot.model_var.get()
             bot.cfg.vision_model = bot.vision_var.get()
+            if hasattr(bot.cfg, "planner_model"):
+                bot.cfg.planner_model = bot.planner_var.get() or None
             bot.cfg.admin_username = bot.admin_var.get()
 
             messagebox.showinfo(
@@ -5242,11 +5265,12 @@ Always validate before advising. Help identify patterns and coping strategies. E
                 (
                     f"Settings saved to {config_path}!\n\n"
                     f"Chat Model: {bot.model_var.get()}\n"
-                    f"Vision Model: {bot.vision_var.get()}"
+                    f"Vision Model: {bot.vision_var.get()}\n"
+                    f"Planner Model: {bot.planner_var.get() or '(unset)'}"
                 ),
             )
             bot.log(
-                f"[Config] Settings saved: {bot.model_var.get()}, {bot.vision_var.get()}"
+                f"[Config] Settings saved: chat={bot.model_var.get()}, planner={bot.planner_var.get()}"
             )
         except Exception as exc:  # noqa: BLE001
             logger.error("Error saving settings: %s", exc, exc_info=True)
@@ -5684,6 +5708,202 @@ Always validate before advising. Help identify patterns and coping strategies. E
         except Exception as exc:  # noqa: BLE001
             logger.error("Error resetting GPU settings: %s", exc)
             bot.log(f"❌ Reset error: {exc}")
+
+    def _create_planner_shadow_tab(self) -> None:
+        """Shadow comparison viewer: heuristic vs LLM planner, side-by-side sentiment."""
+        bot = self.bot
+        tab = ttk.Frame(bot.notebook)
+        bot.notebook.add(tab, text="Planner Shadow")
+
+        # ── top control bar ──────────────────────────────────────────────────
+        ctrl = tk.Frame(tab)
+        ctrl.pack(fill=tk.X, padx=8, pady=4)
+        tk.Button(
+            ctrl,
+            text="Refresh",
+            command=lambda: _refresh(),
+            bg="#3498db",
+            fg="white",
+            font=("Arial", 9, "bold"),
+            padx=10,
+        ).pack(side=tk.LEFT)
+        bot.shadow_status_var = tk.StringVar(value="Click Refresh to load records")
+        tk.Label(ctrl, textvariable=bot.shadow_status_var, font=("Arial", 9), fg="#555").pack(
+            side=tk.LEFT, padx=10
+        )
+
+        # ── vertical pane: table on top, detail below ────────────────────────
+        paned = tk.PanedWindow(tab, orient=tk.VERTICAL, sashwidth=5, sashrelief=tk.RAISED)
+        paned.pack(fill=tk.BOTH, expand=True, padx=5, pady=2)
+
+        # Table frame
+        tree_frame = ttk.Frame(paned)
+        paned.add(tree_frame, minsize=130)
+
+        cols = ("time", "message", "h_ms", "llm_ms", "mismatches")
+        bot.shadow_tree = ttk.Treeview(tree_frame, columns=cols, show="headings", height=7)
+        for col, label, width, anchor in (
+            ("time",       "Time",         130, "center"),
+            ("message",    "Message",       420, "w"),
+            ("h_ms",       "H-ms",           65, "center"),
+            ("llm_ms",     "LLM-ms",         75, "center"),
+            ("mismatches", "Field mismatches",200, "w"),
+        ):
+            bot.shadow_tree.heading(col, text=label)
+            bot.shadow_tree.column(col, width=width, anchor=anchor, stretch=(col == "message"))
+
+        vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=bot.shadow_tree.yview)
+        bot.shadow_tree.configure(yscrollcommand=vsb.set)
+        bot.shadow_tree.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+
+        # Detail frame: two side-by-side panels
+        detail_outer = ttk.Frame(paned)
+        paned.add(detail_outer, minsize=220)
+
+        h_frame = ttk.LabelFrame(detail_outer, text="Heuristic planner", padding=5)
+        h_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(4, 2), pady=4)
+        bot.shadow_h_text = scrolledtext.ScrolledText(
+            h_frame, wrap=tk.WORD, font=("Consolas", 9), state=tk.DISABLED
+        )
+        bot.shadow_h_text.pack(fill=tk.BOTH, expand=True)
+
+        llm_frame = ttk.LabelFrame(detail_outer, text="LLM analyzer", padding=5)
+        llm_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(2, 4), pady=4)
+        bot.shadow_llm_text = scrolledtext.ScrolledText(
+            llm_frame, wrap=tk.WORD, font=("Consolas", 9), state=tk.DISABLED
+        )
+        bot.shadow_llm_text.pack(fill=tk.BOTH, expand=True)
+
+        # ── data store ───────────────────────────────────────────────────────
+        bot._shadow_rows = []  # list of (tree_item_id, plan_dict)
+
+        def _fmt(v) -> str:
+            if v is None:
+                return "-"
+            if isinstance(v, float):
+                return f"{v:+.3f}"
+            return str(v)
+
+        def _write_text(widget, content: str) -> None:
+            widget.config(state=tk.NORMAL)
+            widget.delete("1.0", tk.END)
+            widget.insert("1.0", content)
+            widget.config(state=tk.DISABLED)
+
+        def _refresh() -> None:
+            bot.shadow_tree.delete(*bot.shadow_tree.get_children())
+            bot._shadow_rows = []
+            try:
+                with db_ro() as conn:
+                    rows = conn.execute(
+                        """
+                        SELECT id, created_at, user_text, plan_json
+                        FROM turn_audit_log
+                        WHERE plan_json LIKE '%shadow_comparison%'
+                          AND plan_json NOT LIKE '%"shadow_comparison": null%'
+                        ORDER BY id DESC
+                        LIMIT 80
+                        """
+                    ).fetchall()
+            except Exception as exc:
+                bot.shadow_status_var.set(f"DB error: {exc}")
+                return
+
+            loaded = 0
+            for row in rows:
+                try:
+                    plan = json.loads(row["plan_json"] or "{}")
+                except Exception:
+                    continue
+                shadow = plan.get("shadow_comparison")
+                if not isinstance(shadow, dict):
+                    continue
+                h_ms = shadow.get("heuristic_latency_ms")
+                llm_ms = shadow.get("llm_latency_ms")
+                mismatches = shadow.get("mismatch_fields") or []
+                ts = str(row["created_at"] or "")[:16]
+                preview = str(row["user_text"] or "")[:65].replace("\n", " ")
+                iid = bot.shadow_tree.insert(
+                    "",
+                    tk.END,
+                    values=(
+                        ts,
+                        preview,
+                        f"{h_ms:.1f}" if isinstance(h_ms, (int, float)) else "?",
+                        f"{llm_ms:.1f}" if isinstance(llm_ms, (int, float)) else "?",
+                        ", ".join(mismatches) if mismatches else "none",
+                    ),
+                )
+                bot._shadow_rows.append((iid, plan))
+                loaded += 1
+
+            bot.shadow_status_var.set(
+                f"{loaded} shadow records  |  shadow mode: "
+                + ("ON" if loaded > 0 else "check llm_turn_planner_shadow flag")
+            )
+
+        def _build_flag_block(summary: dict) -> str:
+            lines = []
+            for key, label in (
+                ("primary_intent",          "Intent          "),
+                ("sentiment_priority",       "Priority        "),
+                ("emotion_label",            "Emotion         "),
+                ("scheduled_event",          "Scheduled event "),
+                ("allow_reminder_action",    "Allow reminder  "),
+                ("timing_question_ok",       "Timing q ok     "),
+                ("crisis_risk",              "Crisis risk     "),
+                ("needs_rag",                "Needs RAG       "),
+                ("needs_live_search_now",    "Search now      "),
+                ("needs_live_search_followup","Search deferred"),
+                ("allow_media_action",       "Allow media     "),
+                ("clarification_required",   "Clarify needed  "),
+            ):
+                lines.append(f"{label}: {_fmt(summary.get(key))}\n")
+            return "".join(lines)
+
+        def _on_select(event) -> None:
+            sel = bot.shadow_tree.selection()
+            if not sel:
+                return
+            plan = next((p for iid, p in bot._shadow_rows if iid == sel[0]), None)
+            if plan is None:
+                return
+
+            shadow = plan.get("shadow_comparison") or {}
+            h_sum = shadow.get("heuristic_summary") or {}
+            llm_sum = shadow.get("llm_summary") or {}
+            h_ms = shadow.get("heuristic_latency_ms", "?")
+            llm_ms = shadow.get("llm_latency_ms", "?")
+            llm_model = shadow.get("llm_model") or "unknown"
+            mismatches = shadow.get("mismatch_fields") or []
+
+            h_content = (
+                "=== HEURISTIC ===\n\n"
+                + _build_flag_block(h_sum)
+                + "\nSentiment dimensions:\n"
+                + "  (not scored by heuristic path)\n"
+                + f"\nLatency: {h_ms} ms\n"
+            )
+
+            llm_content = (
+                f"=== LLM ANALYZER ({llm_model}) ===\n\n"
+                + _build_flag_block(llm_sum)
+                + "\nSentiment dimensions (merged into plan):\n"
+                + f"  Valence   : {_fmt(plan.get('sentiment_valence'))}\n"
+                + f"  Arousal   : {_fmt(plan.get('sentiment_arousal'))}\n"
+                + f"  Dominance : {_fmt(plan.get('sentiment_dominance'))}\n"
+                + f"  Confidence: {_fmt(plan.get('sentiment_confidence'))}\n"
+                + f"\nLatency: {llm_ms} ms\n"
+            )
+            if mismatches:
+                llm_content += f"\nMismatched fields:\n  {', '.join(mismatches)}\n"
+
+            _write_text(bot.shadow_h_text, h_content)
+            _write_text(bot.shadow_llm_text, llm_content)
+
+        bot.shadow_tree.bind("<<TreeviewSelect>>", _on_select)
+        bot.root.after(800, _refresh)
 
     def _create_gpu_tab(self) -> None:
         bot = self.bot
