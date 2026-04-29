@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir \"c:\\Users\\Cole\\CodeStuff\\soph_projects\\wellness_bot_V1.0\\unified_bot.py*\" /o-d)",
+      "Bash(python:*)",
+      "Bash(dir:*)",
+      "Bash(iconv:*)",
+      "Bash(curl:*)",
+      "Bash(pip install:*)",
+      "Bash(findstr:*)",
+      "Bash(node -c:*)",
+      "Bash(node -e:*)",
+      "Bash(xargs:*)",
+      "Bash(find:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(python3:*)",
+      "Bash(sqlite3 \"c:\\\\Users\\\\Cole\\\\CodeStuff\\\\soph_projects\\\\wellness_bot_V1.0\\\\wellness_data\\\\telegram_wellness.db\" \".tables\")",
+      "Bash(sqlite3 \"c:\\\\Users\\\\Cole\\\\CodeStuff\\\\soph_projects\\\\wellness_bot_V1.0\\\\wellness_data\\\\telegram_wellness.db\" \"SELECT sql FROM sqlite_master WHERE type=''table'' AND name IN \\(''custom_characters'', ''user_character_access''\\);\")",
+      "Bash(echo \"exit: $?\")",
+      "Bash(pip index:*)",
+      "Bash(gh auth *)",
+      "Bash(git init *)",
+      "Bash(git add *)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

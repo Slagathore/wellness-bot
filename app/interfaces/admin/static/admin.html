@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Wellness Admin</title>
+  <link rel="stylesheet" href="/static/admin.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-wordcloud@4.4.3/build/index.umd.min.js"></script>
+</head>
+<body>
+  <div id="toast-container"></div>
+
+  <!-- Header -->
+  <header>
+    <div class="brand">Wellness Admin <span class="pill">v{{VERSION}}</span></div>
+    <div class="header-controls">
+      <label><input type="checkbox" id="danger-toggle" /> Dangerous tools</label>
+      <form id="trust-form" style="display:flex;gap:6px;align-items:center;">
+        <input type="text" id="trust-token" placeholder="Trust token" style="width:140px;" />
+        <button type="submit" class="sm secondary">Trust Device</button>
+      </form>
+    </div>
+  </header>
+
+  <!-- Tab Navigation -->
+  <nav class="tab-nav">
+    <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+    <button class="tab-btn" data-tab="users">Users</button>
+    <button class="tab-btn" data-tab="moderation">Moderation <span class="badge"></span></button>
+    <button class="tab-btn" data-tab="analytics">Analytics</button>
+    <button class="tab-btn" data-tab="psych">Psych Profile</button>
+    <button class="tab-btn" data-tab="system">System</button>
+    <button class="tab-btn" data-tab="tools">Tools</button>
+    <button class="tab-btn" data-tab="console">Console</button>
+    <button class="tab-btn" data-tab="media">Media</button>
+    <button class="tab-btn" data-tab="feedback">Feedback</button>
+  </nav>
+
+  <!-- ============================================================ -->
+  <!-- TAB: DASHBOARD -->
+  <!-- ============================================================ -->
+  <div class="tab-content active" id="tab-dashboard">
+    <div class="grid-2col">
+      <div>
+        <section>
+          <h2>Health Status</h2>
+          <div class="grid" id="status-cards" style="grid-template-columns:repeat(auto-fit,minmax(120px,1fr));"></div>
+        </section>
+        <section class="mt-16">
+          <h2>DB Overview</h2>
+          <div id="db-stats-content" class="text-muted">Loading...</div>
+        </section>
+      </div>
+      <div>
+        <section>
+          <h2>Controls</h2>
+          <div class="form-grid" style="grid-template-columns:1fr 1fr;">
+            <button id="btn-refresh-status" class="secondary">Refresh Status</button>
+            <button id="btn-enable">Enable Bot</button>
+            <button id="btn-restart" class="danger">Restart Bot</button>
+            <button id="btn-disable" class="danger">Disable Bot</button>
+          </div>
+          <button id="btn-shutdown-admin" class="danger sm mt-12 full-width">Stop Admin App</button>
+        </section>
+        <section class="mt-16">
+          <h2>Broadcast</h2>
+          <textarea id="broadcast-text" rows="2" placeholder="Message to all users"></textarea>
+          <div class="flex items-center gap-8 mt-8">
+            <label><input type="checkbox" id="broadcast-dryrun" checked /> Dry run</label>
+            <button id="btn-broadcast" class="danger sm" style="margin-left:auto;">Send Broadcast</button>
+          </div>
+        </section>
+      </div>
+    </div>
+    <section class="mt-16">
+      <div class="flex items-center justify-between">
+        <h2>Live Feed</h2>
+        <button id="btn-feed-pause" class="sm ghost">Pause Feed</button>
+      </div>
+      <div id="live-feed" class="feed-box"></div>
+    </section>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- TAB: USERS -->
+  <!-- ============================================================ -->
+  <div class="tab-content" id="tab-users">
+    <section>
+      <div class="flex items-center justify-between mb-8">
+        <h2 style="margin:0;">Users</h2>
+        <div class="flex gap-8">
+          <button id="btn-users-select-all" class="sm ghost">Toggle All</button>
+          <button id="btn-users-delete-selected" class="sm danger">Delete Selected</button>
+        </div>
+      </div>
+      <div class="mb-8">
+        <input type="text" id="users-search" placeholder="Search by name, username, or ID..." />
+      </div>
+      <div id="users-list"></div>
+      <div class="pagination">
+        <button id="btn-users-prev" class="sm ghost">&larr; Previous</button>
+        <button id="btn-users-next" class="sm ghost">Next &rarr;</button>
+        <span id="users-page-info" class="page-info"></span>
+      </div>
+      <div class="mt-12">
+        <input type="number" id="user-id-input" placeholder="Quick lookup by User ID" />
+      </div>
+    </section>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- TAB: MODERATION (merged with Crisis Alerts) -->
+  <!-- ============================================================ -->
+  <div class="tab-content" id="tab-moderation">
+    <!-- Sub-tabs -->
+    <div class="subtab-nav">
+      <button class="subtab-btn active" data-subtab="mod-events">All Events</button>
+      <button class="subtab-btn" data-subtab="mod-crisis">Crisis Alerts</button>
+    </div>
+
+    <!-- Subtab: All Events -->
+    <div class="subtab-content active" id="subtab-mod-events">
+      <section>
+        <div class="flex items-center gap-8 mb-8 flex-wrap">
+          <select id="moderation-filter-resolved" style="width:auto;">
+            <option value="open">Open</option>
+            <option value="all">All</option>
+            <option value="resolved">Resolved</option>
+            <option value="critical">Critical Only (4+)</option>
+          </select>
+          <label class="text-xs">Limit: <input type="number" id="moderation-limit" value="100" min="1" max="500" style="width:70px;" /></label>
+          <button id="btn-moderation-load" class="sm">Load Events</button>
+        </div>
+        <div class="flex items-center gap-8 mb-8 flex-wrap">
+          <button id="btn-moderation-select-all" class="sm secondary">Select All</button>
+          <button id="btn-moderation-select-none" class="sm secondary">Select None</button>
+          <button id="btn-moderation-resolve-selected" class="sm">Resolve Selected</button>
+          <button id="btn-moderation-delete-selected" class="sm secondary">Remove Selected</button>
+          <span id="moderation-selection-count" class="text-xs text-muted">0 selected</span>
+        </div>
+        <div id="moderation-results"></div>
+      </section>
+    </div>
+
+    <!-- Subtab: Crisis Alerts -->
+    <div class="subtab-content" id="subtab-mod-crisis">
+      <section>
+        <div class="flex items-center gap-8 mb-8">
+          <label class="text-xs">Limit: <input type="number" id="crisis-limit" value="100" min="1" max="500" style="width:70px;" /></label>
+          <button id="btn-crisis-refresh" class="sm">Refresh Alerts</button>
+        </div>
+        <div class="flex items-center gap-8 mb-8 flex-wrap">
+          <button id="btn-crisis-select-all" class="sm secondary">Select All</button>
+          <button id="btn-crisis-select-none" class="sm secondary">Select None</button>
+          <button id="btn-crisis-resolve-selected" class="sm">Resolve Selected</button>
+          <button id="btn-crisis-delete-selected" class="sm secondary">Remove Selected</button>
+          <span id="crisis-selection-count" class="text-xs text-muted">0 selected</span>
+        </div>
+        <div id="crisis-results"></div>
+      </section>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- TAB: ANALYTICS (with subtabs) -->
+  <!-- ============================================================ -->
+  <div class="tab-content" id="tab-analytics">
+    <!-- Sub-tabs -->
+    <div class="subtab-nav">
+      <button class="subtab-btn active" data-subtab="app-metrics">App Metrics</button>
+      <button class="subtab-btn" data-subtab="system-metrics">System</button>
+      <button class="subtab-btn" data-subtab="latency">Latency</button>
+      <button class="subtab-btn" data-subtab="user-analytics">User Analytics</button>
+      <button class="subtab-btn" data-subtab="graphs">Graphs</button>
+    </div>
+
+    <!-- Subtab: App Metrics -->
+    <div class="subtab-content active" id="subtab-app-metrics">
+      <section>
+        <div class="flex items-center gap-8 mb-8">
+          <h2 style="margin:0;">App Metrics</h2>
+          <label class="text-xs">Window: <input type="number" id="window-hours" value="24" min="1" max="168" style="width:60px;" /> hrs</label>
+        </div>
+        <div id="app-metrics"></div>
+      </section>
+      <section class="mt-16">
+        <h2>Timeseries</h2>
+        <div id="app-metrics-chart"></div>
+      </section>
+    </div>
+
+    <!-- Subtab: System Metrics -->
+    <div class="subtab-content" id="subtab-system-metrics">
+      <section>
+        <h2>System Resources</h2>
+        <div id="system-metrics"></div>
+      </section>
+    </div>
+
+    <!-- Subtab: Latency -->
+    <div class="subtab-content" id="subtab-latency">
+      <section>
+        <div class="flex items-center gap-8 mb-8">
+          <h2 style="margin:0;">Message Latency</h2>
+          <label class="text-xs">Rows: <input type="number" id="latency-limit" value="20" min="1" max="200" style="width:60px;" /></label>
+          <button id="btn-latency-refresh" class="sm">Refresh</button>
+        </div>
+        <div id="latency-live"></div>
+      </section>
+    </div>
+
+    <!-- Subtab: User Analytics -->
+    <div class="subtab-content" id="subtab-user-analytics">
+      <section>
+        <div class="flex items-center gap-8 mb-8">
+          <h2 style="margin:0;">User Analytics</h2>
+          <select id="user-analytics-user" style="width:auto;"></select>
+          <button id="btn-user-analytics-refresh" class="sm">Refresh</button>
+        </div>
+        <div id="user-analytics-content">
+          <div class="text-muted">Click this tab to load user analytics data.</div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Subtab: Graphs -->
+    <div class="subtab-content" id="subtab-graphs">
+      <section>
+        <div class="flex items-center gap-8 mb-8">
+          <h2 style="margin:0;">Visual Analytics</h2>
+          <select id="graphs-user" style="width:auto;"></select>
+          <select id="graphs-range" style="width:auto;">
+            <option value="7">Last 7 days</option>
+            <option value="14" selected>Last 14 days</option>
+            <option value="30">Last 30 days</option>
+            <option value="90">Last 90 days</option>
+            <option value="all">All Time</option>
+          </select>
+          <button id="btn-graphs-refresh" class="sm">Refresh</button>
+        </div>
+        <div id="graphs-content">
+          <div class="text-muted">Select a user and click Refresh to load graphs.</div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- TAB: PSYCH PROFILE -->
+  <!-- ============================================================ -->
+  <div class="tab-content" id="tab-psych">
+    <section>
+      <h2>Psychological Profiles</h2>
+      <div class="form-grid mb-8" style="grid-template-columns:1fr 1fr auto auto;">
+        <select id="psych-user"></select>
+        <select id="psych-history"></select>
+        <button id="btn-psych-load">Load Profile</button>
+        <button id="btn-psych-reanalyze" class="danger">Force Reanalysis</button>
+        <button id="btn-psych-export" class="secondary">Export Profile</button>
+      </div>
+      <div class="card mb-8">
+        <div class="text-xs text-muted mb-8">Reanalysis Progress</div>
+        <progress id="psych-reanalyze-progress" value="0" max="100" style="width:100%;"></progress>
+        <div id="psych-reanalyze-status" class="text-xs text-muted mt-8"></div>
+      </div>
+      <div id="psych-results" class="card" style="line-height:1.6;padding:14px;min-height:200px;"></div>
+    </section>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- TAB: SYSTEM -->
+  <!-- ============================================================ -->
+  <div class="tab-content" id="tab-system">
+    <div class="grid-2col">
+      <section>
+        <h2>Module Status</h2>
+        <div class="grid" id="module-status" style="grid-template-columns:repeat(auto-fit,minmax(140px,1fr));"></div>
+      </section>
+      <section>
+        <h2>Scheduler</h2>
+        <pre id="scheduler-status"></pre>
+      </section>
+      <section>
+        <h2>Telegram Status</h2>
+        <pre id="telegram-status"></pre>
+      </section>
+      <section style="grid-column: span 2;">
+        <h2>Recent Telegram Exchanges</h2>
+        <div id="telegram-recent"></div>
+      </section>
+      <section>
+        <h2>Model Overrides</h2>
+        <div class="form-col">
+          <div class="form-grid" style="grid-template-columns:1fr 1fr 1fr;">
+            <div class="form-group">
+              <label>Chat Model</label>
+              <select id="model-chat"></select>
+            </div>
+            <div class="form-group">
+              <label>Embed Model</label>
+              <select id="model-embed"></select>
+            </div>
+            <div class="form-group">
+              <label>Vision Model</label>
+              <select id="model-vision"></select>
+            </div>
+          </div>
+          <button id="btn-model-save" class="mt-8">Save Models</button>
+        </div>
+        <div class="card mt-12">
+          <h3 style="margin-top:0;">Pull Model</h3>
+          <div class="flex gap-8">
+            <input type="text" id="model-pull-name" placeholder="e.g. qwen2.5:14b" />
+            <button id="btn-model-pull">Pull</button>
+          </div>
+          <progress id="model-pull-progress" value="0" max="100" style="width:100%;margin-top:8px;"></progress>
+          <div id="model-pull-status" class="text-xs text-muted mt-8"></div>
+        </div>
+        <pre id="model-results" class="mt-8"></pre>
+      </section>
+      <section style="grid-column: span 2;">
+        <h2>LLM Defaults <span class="text-xs text-muted">(admin overrides for all users)</span></h2>
+        <p class="text-xs text-muted">Set default LLM parameters for Standard personalities and Downbad mode separately. Users can override these with <code>/settings</code>.</p>
+        <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:16px;">
+          <div class="card">
+            <h3 style="margin-top:0;">Standard Personalities</h3>
+            <div class="form-col">
+              <div class="form-group"><label>Temperature <span class="tooltip-icon" title="Controls randomness. 0.1=focused, 2.0=creative.">?</span></label><input type="number" id="llm-std-temperature" step="0.05" min="0.1" max="2.0" placeholder="personality default" /></div>
+              <div class="form-group"><label>Top P <span class="tooltip-icon" title="Nucleus sampling cutoff. 0.1=safe words only, 1.0=full diversity.">?</span></label><input type="number" id="llm-std-top_p" step="0.05" min="0.1" max="1.0" placeholder="personality default" /></div>
+              <div class="form-group"><label>Top K <span class="tooltip-icon" title="Candidate token pool size. 1=most likely only, 100=broad variety.">?</span></label><input type="number" id="llm-std-top_k" step="1" min="1" max="100" placeholder="40" /></div>
+              <div class="form-group"><label>Repeat Penalty <span class="tooltip-icon" title="Penalizes repetition. 0.5=allows repeats, 2.0=strongly discourages.">?</span></label><input type="number" id="llm-std-repeat_penalty" step="0.05" min="0.5" max="2.0" placeholder="personality default" /></div>
+              <div class="form-group"><label>Context Window (num_ctx) <span class="tooltip-icon" title="How many tokens of history the model sees. Higher=more context, more VRAM.">?</span></label><input type="number" id="llm-std-num_ctx" step="512" min="2048" max="32768" placeholder="personality default" /></div>
+              <div class="form-group"><label>Max Response Tokens (num_predict) <span class="tooltip-icon" title="Maximum length of each response. 128=short, 4096=very long.">?</span></label><input type="number" id="llm-std-num_predict" step="64" min="128" max="4096" placeholder="1024" /></div>
+            </div>
+          </div>
+          <div class="card">
+            <h3 style="margin-top:0;">Downbad Mode</h3>
+            <div class="form-col">
+              <div class="form-group"><label>Temperature</label><input type="number" id="llm-db-temperature" step="0.05" min="0.1" max="2.0" placeholder="personality default" /></div>
+              <div class="form-group"><label>Top P</label><input type="number" id="llm-db-top_p" step="0.05" min="0.1" max="1.0" placeholder="personality default" /></div>
+              <div class="form-group"><label>Top K</label><input type="number" id="llm-db-top_k" step="1" min="1" max="100" placeholder="40" /></div>
+              <div class="form-group"><label>Repeat Penalty</label><input type="number" id="llm-db-repeat_penalty" step="0.05" min="0.5" max="2.0" placeholder="personality default" /></div>
+              <div class="form-group"><label>Context Window (num_ctx)</label><input type="number" id="llm-db-num_ctx" step="512" min="2048" max="32768" placeholder="personality default" /></div>
+              <div class="form-group"><label>Max Response Tokens (num_predict)</label><input type="number" id="llm-db-num_predict" step="64" min="128" max="4096" placeholder="1024" /></div>
+            </div>
+          </div>
+        </div>
+        <button id="btn-llm-defaults-save" class="mt-8">Save LLM Defaults</button>
+        <span id="llm-defaults-status" class="text-xs text-muted ml-8"></span>
+      </section>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- TAB: TOOLS -->
+  <!-- ============================================================ -->
+  <div class="tab-content" id="tab-tools">
+    <!-- Sub-tabs for tools -->
+    <div class="subtab-nav">
+      <button class="subtab-btn active" data-subtab="tool-reminders">Reminders</button>
+      <button class="subtab-btn" data-subtab="tool-memory">Memory Search</button>
+      <button class="subtab-btn" data-subtab="tool-export">User Export</button>
+    </div>
+
+    <!-- Subtab: Reminders -->
+    <div class="subtab-content active" id="subtab-tool-reminders">
+      <div class="grid-2col">
+        <section>
+          <h2>Reminder Controls</h2>
+          <div class="form-col">
+            <select id="reminder-user-select"></select>
+            <div class="flex gap-8">
+              <button id="btn-reminder-load-user" class="full-width">Manage User Reminders</button>
+              <button id="btn-reminder-clear-all" class="danger full-width">Clear All (All Users)</button>
+            </div>
+            <select id="reminder-id-input"></select>
+            <input type="text" id="reminder-text-input" placeholder="Reminder text" />
+            <input type="datetime-local" id="reminder-time-input" />
+            <select id="reminder-mode-input">
+              <option value="one_off_exact">One-off Exact</option>
+              <option value="recurring_exact">Recurring Exact</option>
+              <option value="one_off_fuzzy">One-off Fuzzy</option>
+              <option value="recurring_fuzzy">Recurring Fuzzy</option>
+            </select>
+            <input type="text" id="reminder-cron-input" placeholder="Cron (for recurring)" />
+            <input type="number" id="reminder-fuzz-minutes" placeholder="Fuzz minutes" />
+            <label><input type="checkbox" id="reminder-enabled-input" checked /> Enabled</label>
+            <div class="form-grid" style="grid-template-columns:repeat(5,1fr);">
+              <button id="btn-reminder-enable" class="sm">Enable</button>
+              <button id="btn-reminder-disable" class="sm danger">Disable</button>
+              <button id="btn-reminder-update" class="sm secondary">Update</button>
+              <button id="btn-reminder-create" class="sm">Create</button>
+              <button id="btn-reminder-delete" class="sm danger">Delete</button>
+            </div>
+          </div>
+        </section>
+        <section>
+          <h2>Reminder List</h2>
+          <pre id="reminder-list" style="max-height:300px;overflow:auto;"></pre>
+          <pre id="reminder-action-result" class="mt-8"></pre>
+        </section>
+      </div>
+    </div>
+
+    <!-- Subtab: Memory Search -->
+    <div class="subtab-content" id="subtab-tool-memory">
+      <section>
+        <h2>Memory Search</h2>
+        <div class="form-grid mb-8">
+          <input type="text" id="memory-query" placeholder="Search text" />
+          <select id="memory-user-select"></select>
+          <select id="memory-role-filter">
+            <option value="">All roles</option>
+            <option value="user">User only</option>
+            <option value="assistant">Assistant only</option>
+            <option value="system">System only</option>
+          </select>
+          <input type="text" id="memory-since" placeholder="Since (ISO)" />
+          <input type="text" id="memory-until" placeholder="Until (ISO)" />
+          <input type="number" id="memory-limit" value="50" placeholder="Limit" />
+          <button id="btn-memory-search">Search</button>
+        </div>
+        <pre id="memory-results"></pre>
+      </section>
+    </div>
+
+    <!-- Subtab: User Export -->
+    <div class="subtab-content" id="subtab-tool-export">
+      <section>
+        <h2>User Export (PII-masked)</h2>
+        <div class="form-grid mb-8">
+          <select id="export-user-select"></select>
+          <input type="text" id="export-since" placeholder="Since (ISO)" />
+          <input type="text" id="export-until" placeholder="Until (ISO)" />
+          <input type="number" id="export-limit" value="500" placeholder="Message limit" />
+          <button id="btn-export-user">Export</button>
+        </div>
+        <pre id="export-results"></pre>
+      </section>
+    </div>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- TAB: CONSOLE (renamed from High-Risk, legacy removed) -->
+  <!-- ============================================================ -->
+  <div class="tab-content" id="tab-console">
+    <section>
+      <h2>Enhanced LLM Console</h2>
+      <p class="text-xs text-warning mb-8">
+        Omniscient assistant with 11 tools: read/edit files, query/modify database, manage users, search messages, and more. File edits auto-rollback.
+      </p>
+      <div class="flex gap-8 items-center flex-wrap mb-8">
+        <label class="text-xs"><input type="checkbox" id="console-tools-enabled" checked /> Enable Tools</label>
+        <label class="text-xs"><input type="checkbox" id="console-external-files" /> Allow External Files</label>
+        <button id="btn-console-clear" class="sm secondary">Clear History</button>
+        <button id="btn-console-sessions" class="sm secondary">View Sessions</button>
+        <span id="console-session-info" class="text-xs text-muted" style="margin-left:auto;"></span>
+      </div>
+      <div id="console-chat-history" style="background:#0b1222;border:1px solid #1f2937;border-radius:6px;padding:12px;min-height:400px;max-height:600px;overflow-y:auto;margin-bottom:12px;font-family:'Cascadia Code','Fira Code',monospace;font-size:13px;">
+        <div class="text-muted" style="font-style:italic;">Console ready. Type a message to begin...</div>
+      </div>
+      <div class="flex gap-8">
+        <textarea id="console-input" placeholder="Ask anything... Ctrl+Enter to send" style="flex:1;min-height:80px;font-family:'Cascadia Code','Fira Code',monospace;"></textarea>
+        <div class="flex flex-col gap-8">
+          <button id="btn-console-send" class="danger" style="height:40px;">Send</button>
+          <button id="btn-console-stop" class="secondary" style="height:40px;" disabled>Stop</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- TAB: MEDIA -->
+  <!-- ============================================================ -->
+  <div class="tab-content" id="tab-media">
+    <div class="grid-2col">
+      <section>
+        <h2>AI Media Generation</h2>
+        <div class="form-col">
+          <div class="form-group">
+            <label>Model</label>
+            <select id="media-model">
+              <optgroup label="Image Models">
+                <option value="flux2-klein">FLUX.2 Klein 9B GGUF (Local API, default)</option>
+                <option value="pony-xl-v6">Pony Diffusion XL v6 (Local, 7GB, ~45s, NSFW+anime)</option>
+                <option value="wai-illustrious-xl">WAI Illustrious SDXL v1.60 (Local, 7GB, ~60s, NSFW+hires)</option>
+                <option value="unholy-desire-v7">Unholy Desire Mix Sinister v7.0 (Local, 7GB, ~30s, NSFW)</option>
+                <option value="sdxl">Stable Diffusion XL (8GB, ~45s)</option>
+                <option value="sdxl-turbo">SDXL Turbo (6GB, ~20s)</option>
+                <option value="flux">FLUX.1-dev (10GB, ~90s)</option>
+                <option value="z-image-fp8">z-image FP8 Distilled (8GB, ~25s)</option>
+                <option value="z-image-q8-gguf">Z-Image Q8 GGUF (8GB+, ~420s)</option>
+                <option value="easydiffusion">EasyDiffusion (local API, current model)</option>
+                <option value="perchance">Perchance (remote, Playwright-backed)</option>
+                <option value="perchance_other">Perchance Other (direct URL API)</option>
+                <option value="playground">Playground v2.5 (8GB, ~50s)</option>
+                <option value="pixart">PixArt-&#x3A3; (7GB, ~35s)</option>
+              </optgroup>
+              <optgroup label="Video Models (T2V)">
+                <option value="ltx2">LTX2 Rapid Merges (10GB, ~120s)</option>
+                <option value="wan-t2v">Wan 1.3B NSFW T2V (8GB, ~180s)</option>
+              </optgroup>
+            </select>
+          </div>
+          <div class="form-group" id="media-epoch-group" style="display:none;">
+            <label>Epoch Checkpoint</label>
+            <select id="media-epoch">
+              <option value="1">Epoch 1 (least trained)</option>
+              <option value="2">Epoch 2</option>
+              <option value="3">Epoch 3</option>
+              <option value="4">Epoch 4</option>
+              <option value="5">Epoch 5</option>
+              <option value="6">Epoch 6</option>
+              <option value="7">Epoch 7</option>
+              <option value="8">Epoch 8</option>
+              <option value="9">Epoch 9</option>
+              <option value="10" selected>Epoch 10 (most trained)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Prompt</label>
+            <textarea id="media-prompt" rows="3" placeholder="Describe the image or video..."></textarea>
+          </div>
+          <div class="form-group">
+            <label>Negative Prompt</label>
+            <textarea id="media-negative" rows="2" placeholder="Things to avoid..."></textarea>
+          </div>
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="media-use-model-defaults" checked />
+              Keep recommended steps and guidance for the selected model
+            </label>
+            <div id="media-parameter-hint" class="form-help">
+              Using recommended settings for the selected model.
+            </div>
+          </div>
+          <div class="form-grid" style="grid-template-columns:1fr 1fr;">
+            <div class="form-group"><label>Steps</label><input type="number" id="media-steps" value="4" min="1" max="100" /></div>
+            <div class="form-group"><label>Guidance</label><input type="number" id="media-guidance" value="4.0" step="0.1" min="0" max="20" /></div>
+            <div class="form-group"><label>Width</label><input type="number" id="media-width" value="1024" step="64" min="128" max="2048" /></div>
+            <div class="form-group"><label>Height</label><input type="number" id="media-height" value="1024" step="64" min="128" max="2048" /></div>
+            <div class="form-group"><label>Seed</label><input type="number" id="media-seed" placeholder="Random" /></div>
+            <div class="form-group"><label>Owner (optional)</label><select id="media-user-id"></select></div>
+            <div class="form-group" id="media-frames-group" style="display:none;"><label>Frames</label><input type="number" id="media-frames" value="33" min="8" max="120" /></div>
+            <div class="form-group" id="media-fps-group" style="display:none;"><label>FPS</label><input type="number" id="media-fps" value="16" min="8" max="60" /></div>
+          </div>
+          <button id="btn-generate-image" class="danger full-width">Generate</button>
+          <div id="media-generation-status" class="text-xs text-muted" style="min-height:20px;"></div>
+        </div>
+      </section>
+      <section>
+        <h2>VRAM Status</h2>
+        <div id="media-vram" class="text-muted">Loading...</div>
+        <div class="flex gap-8 mt-12">
+          <button id="btn-refresh-vram" class="sm secondary">Refresh VRAM</button>
+          <button id="btn-unload-model" class="sm danger">Unload Model</button>
+        </div>
+      </section>
+    </div>
+    <section class="mt-16">
+      <h2>Generation History</h2>
+      <div class="flex gap-8 mb-8">
+        <select id="media-history-user" style="width:auto;"></select>
+        <button id="btn-load-history" class="sm">Load History</button>
+      </div>
+      <div id="media-history" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;">
+        <div class="text-muted">No images generated yet</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- ============================================================ -->
+  <!-- TAB: FEEDBACK -->
+  <!-- ============================================================ -->
+  <div class="tab-content" id="tab-feedback">
+    <section>
+      <div class="flex items-center gap-8 mb-8 flex-wrap">
+        <h2 style="margin:0;">Bugs / Feedback / Suggestions</h2>
+        <select id="feedback-status" style="width:auto;">
+          <option value="">All</option>
+          <option value="new">New</option>
+          <option value="triage">Triage</option>
+          <option value="reviewing">Reviewing</option>
+          <option value="resolved">Resolved</option>
+          <option value="wont_fix">Won't Fix</option>
+        </select>
+        <label class="text-xs">Limit: <input type="number" id="feedback-limit" value="50" style="width:60px;" /></label>
+        <button id="btn-feedback-load" class="sm">Load Feedback</button>
+      </div>
+      <div id="feedback-results"></div>
+    </section>
+  </div>
+
+  <script>var DANGEROUS_ENABLED = "{{DANGEROUS_ENABLED}}" === "true";</script>
+  <script src="/static/admin.js"></script>
+</body>
+</html>

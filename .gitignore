@@ -1,0 +1,94 @@
+# Environment variables and secrets — NEVER commit real credentials
+.env
+.env.local
+.env.*.local
+*.hash
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Type-checking cache
+.mypy_cache/
+.ruff_cache/
+
+# Data directories — user data, databases, and generated content
+wellness_data/
+/data/
+*.db
+*.db-shm
+*.db-wal
+
+# Logs
+*.log
+logs/
+*.jsonl
+
+# Snapshot archives (can be very large)
+.snapshots/
+
+# Large export / import dumps
+perchance*.json
+
+# IDE and editor tooling
+.vscode/
+.idea/
+.kilo/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+nul
+
+# Backup files
+*.bak
+backup/
+backups/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Legacy files (if you archive them)
+archive/
+
+# Downbad / NSFW files — excluded from public repo
+# Sanitized RenameMeTo* copies are committed instead.
+app/personality/modes.py
+app/history_scope.py
+app/orchestrator/persona_runtime.py
+app/runtime/services/preferences.py
+app/onboarding/flow.py
+app/interfaces/telegram/adapter.py
+app/features/nsfw_preferences/
+tests/test_downbad_prompt_history.py

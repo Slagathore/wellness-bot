@@ -1,0 +1,8 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: wellness-bot
+    static_configs:
+      - targets:
+          - bot:9102

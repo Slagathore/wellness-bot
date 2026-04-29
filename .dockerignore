@@ -1,0 +1,13 @@
+.git
+__pycache__
+.pytest_cache
+.venv
+wellness_data
+*.log
+*.pyc
+*.pyo
+*.pyd
+*.db
+.idea
+.vscode
+node_modules
