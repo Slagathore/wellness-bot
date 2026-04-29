@@ -504,14 +504,28 @@ def _generate_impl(
     }
     if format:
         payload["format"] = format
+    request_timeout: float | None = None
     if options:
-        payload["options"] = options
+        payload_options = dict(options)
+        timeout_value = payload_options.pop("request_timeout", None)
+        if timeout_value is not None:
+            try:
+                request_timeout = float(timeout_value)
+            except (TypeError, ValueError):
+                logger.warning(
+                    "Invalid request_timeout %r supplied to generate(); falling back to default.",
+                    timeout_value,
+                )
+        if payload_options:
+            payload["options"] = payload_options
+    if request_timeout is None:
+        request_timeout = 120.0
 
     try:
         response = requests.post(
             f"{cfg.ollama_host}/api/generate",
             json=payload,
-            timeout=120,
+            timeout=request_timeout,
         )
         response.raise_for_status()
     except requests.RequestException as exc:

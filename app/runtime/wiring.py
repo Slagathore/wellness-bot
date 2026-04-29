@@ -36,6 +36,7 @@ from app.runtime.services.user_sessions import UserSessionStore
 from app.runtime.catchup import OfflineCatchupManager
 from app.personality.manager import PersonalityManager
 from app.runtime.services.preferences import PreferenceService
+from app.domain.turns.llm_analyzer import LLMTurnAnalyzer
 from app.domain.turns.planner import TurnPlanner
 from app.domain.turns.followups import TurnFollowupService
 from app.domain.turns.audit import append_turn_route
@@ -90,7 +91,13 @@ def register_defaults() -> None:
             singleton=True,
         )
     if "turn_planner" not in container:
-        container.register("turn_planner", TurnPlanner, singleton=True)
+        container.register(
+            "turn_planner",
+            lambda: TurnPlanner(analyzer=container.resolve("llm_turn_analyzer")),
+            singleton=True,
+        )
+    if "llm_turn_analyzer" not in container:
+        container.register("llm_turn_analyzer", LLMTurnAnalyzer, singleton=True)
     if "turn_followup_service" not in container:
         container.register("turn_followup_service", TurnFollowupService, singleton=True)
     if "conversation_service" not in container:

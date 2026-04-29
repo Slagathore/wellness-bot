@@ -85,7 +85,13 @@ class TurnPlan:
     message_text: str
     primary_intent: str
     sentiment_priority: str
+    planner_source: str = "heuristic"
+    planner_latency_ms: float | None = None
     emotion_label: str | None = None
+    sentiment_valence: float | None = None
+    sentiment_arousal: float | None = None
+    sentiment_dominance: float | None = None
+    sentiment_confidence: float | None = None
     needs_rag: bool = False
     needs_live_search_now: bool = False
     needs_live_search_followup: bool = False
@@ -97,11 +103,15 @@ class TurnPlan:
     reminder_action: str | None = None
     clarification_required: bool = False
     clarification_text: str | None = None
+    crisis_risk: bool = False
+    scheduled_event: bool = False
+    timing_question_ok: bool = False
     profile_candidates: list[TurnProfileCandidate] = field(default_factory=list)
     memory_candidates: list[TurnMemoryCandidate] = field(default_factory=list)
     contradictions: list[dict[str, Any]] = field(default_factory=list)
     followup_jobs: list[str] = field(default_factory=list)
     reasoning: list[str] = field(default_factory=list)
+    shadow_comparison: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -110,7 +120,13 @@ class TurnPlan:
             "message_text": self.message_text,
             "primary_intent": self.primary_intent,
             "sentiment_priority": self.sentiment_priority,
+            "planner_source": self.planner_source,
+            "planner_latency_ms": self.planner_latency_ms,
             "emotion_label": self.emotion_label,
+            "sentiment_valence": self.sentiment_valence,
+            "sentiment_arousal": self.sentiment_arousal,
+            "sentiment_dominance": self.sentiment_dominance,
+            "sentiment_confidence": self.sentiment_confidence,
             "needs_rag": self.needs_rag,
             "needs_live_search_now": self.needs_live_search_now,
             "needs_live_search_followup": self.needs_live_search_followup,
@@ -122,11 +138,17 @@ class TurnPlan:
             "reminder_action": self.reminder_action,
             "clarification_required": self.clarification_required,
             "clarification_text": self.clarification_text,
+            "crisis_risk": self.crisis_risk,
+            "scheduled_event": self.scheduled_event,
+            "timing_question_ok": self.timing_question_ok,
             "profile_candidates": [item.to_dict() for item in self.profile_candidates],
             "memory_candidates": [item.to_dict() for item in self.memory_candidates],
             "contradictions": [dict(item) for item in self.contradictions],
             "followup_jobs": list(self.followup_jobs),
             "reasoning": list(self.reasoning),
+            "shadow_comparison": (
+                dict(self.shadow_comparison) if isinstance(self.shadow_comparison, dict) else None
+            ),
         }
 
     @classmethod
@@ -137,7 +159,33 @@ class TurnPlan:
             message_text=str(raw.get("message_text") or ""),
             primary_intent=str(raw.get("primary_intent") or "conversation"),
             sentiment_priority=str(raw.get("sentiment_priority") or "normal"),
+            planner_source=str(raw.get("planner_source") or "heuristic"),
+            planner_latency_ms=(
+                float(raw["planner_latency_ms"])
+                if raw.get("planner_latency_ms") is not None
+                else None
+            ),
             emotion_label=str(raw["emotion_label"]) if raw.get("emotion_label") else None,
+            sentiment_valence=(
+                float(raw["sentiment_valence"])
+                if raw.get("sentiment_valence") is not None
+                else None
+            ),
+            sentiment_arousal=(
+                float(raw["sentiment_arousal"])
+                if raw.get("sentiment_arousal") is not None
+                else None
+            ),
+            sentiment_dominance=(
+                float(raw["sentiment_dominance"])
+                if raw.get("sentiment_dominance") is not None
+                else None
+            ),
+            sentiment_confidence=(
+                float(raw["sentiment_confidence"])
+                if raw.get("sentiment_confidence") is not None
+                else None
+            ),
             needs_rag=bool(raw.get("needs_rag")),
             needs_live_search_now=bool(raw.get("needs_live_search_now")),
             needs_live_search_followup=bool(raw.get("needs_live_search_followup")),
@@ -155,6 +203,9 @@ class TurnPlan:
                 if raw.get("clarification_text")
                 else None
             ),
+            crisis_risk=bool(raw.get("crisis_risk")),
+            scheduled_event=bool(raw.get("scheduled_event")),
+            timing_question_ok=bool(raw.get("timing_question_ok")),
             profile_candidates=[
                 TurnProfileCandidate.from_dict(dict(item))
                 for item in _safe_list(raw.get("profile_candidates"))
@@ -180,6 +231,11 @@ class TurnPlan:
                 for item in _safe_list(raw.get("reasoning"))
                 if str(item).strip()
             ],
+            shadow_comparison=(
+                dict(raw["shadow_comparison"])
+                if isinstance(raw.get("shadow_comparison"), dict)
+                else None
+            ),
         )
 
 

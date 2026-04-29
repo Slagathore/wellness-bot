@@ -18,11 +18,16 @@ _DEFAULT_FLAGS: Dict[str, bool] = {
     "enhanced_text_cleaning": False,
     "prompt_layering": False,
     "multi_document_import": False,
-    "conversation_memory_v2": False,
+    "conversation_memory_v2": True,
     "web_search_v2": False,
     "discord_bot": True,
     "plaintext_media_generation": True,
     "llm_continuation_on_truncation": True,
+    "llm_turn_planner_shadow": False,
+    "llm_turn_planner_v1": False,
+    # Legacy aliases kept for backward compatibility with older env payloads.
+    "turn_planner_shadow": False,
+    "turn_planner_llm_primary": False,
 }
 
 _runtime_overrides: Dict[str, bool] = {}
