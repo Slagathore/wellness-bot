@@ -1,0 +1,18 @@
+# Modular runtime ownership
+/app/core/ @platform-team
+/app/domain/ @platform-team @product-team
+/app/infra/ @platform-team
+/app/interfaces/ @platform-team @product-team
+/app/runtime/ @platform-team
+/app/workers/ @platform-team
+/app/monitoring.py @platform-team
+/app/monitoring/ @platform-team
+
+# Admin/docs
+/app/interfaces/admin/ @platform-team
+/docs/ @platform-team @product-team
+/archive/ @platform-team
+
+# Root entrypoints
+/app/main_modular.py @platform-team
+/archive/unified_bot.py @platform-team

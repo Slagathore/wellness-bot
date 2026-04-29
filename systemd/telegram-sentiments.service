@@ -1,0 +1,15 @@
+﻿[Unit]
+Description=Telegram Wellness Bot - Sentiment Worker
+After=network.target
+
+[Service]
+Type=simple
+User=telegram-bot
+WorkingDirectory=/opt/telegram_wellness_bot
+Environment="PATH=/opt/telegram_wellness_bot/venv/bin"
+ExecStart=/opt/telegram_wellness_bot/venv/bin/python -m app.workers.sentiments
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,132 @@
+# =============================================================================
+# WELLNESS BOT V1.0 — DEPENDENCIES
+# Install core deps first, then uncomment optional sections as needed.
+#   pip install -r requirements.txt
+# =============================================================================
+
+# --- Core framework ----------------------------------------------------------
+fastapi>=0.118.2
+uvicorn>=0.24.0
+starlette>=0.27.0
+
+# --- Telegram / Discord ------------------------------------------------------
+python-telegram-bot>=22.5
+discord.py>=2.4.0
+
+# --- Async networking --------------------------------------------------------
+httpx>=0.25.2
+aiohttp>=3.9.0
+aiofiles>=23.2.0
+anyio>=4.0.0
+websockets>=13.0
+
+# --- Database & vector store -------------------------------------------------
+aiosqlite>=0.19.0
+sqlite-vec>=0.0.1a13       # fast vector search; may have native issues on Windows
+duckdb>=0.9.2              # analytics queries
+numpy>=1.26.4              # numpy vector backend (pure-Python fallback)
+
+# --- Event bus / caching -----------------------------------------------------
+redis>=5.0.1
+
+# --- Configuration & validation ----------------------------------------------
+pydantic>=2.7.0
+pydantic-settings>=2.2.0
+python-dotenv>=1.0.1
+
+# --- Task scheduling ---------------------------------------------------------
+APScheduler>=3.10.4
+croniter>=2.0.1
+schedule>=1.2.0
+
+# --- LLM clients -------------------------------------------------------------
+ollama>=0.5.1              # Ollama local inference
+openai>=1.30.0             # OpenAI-compatible API client (used for cloud proxy)
+tiktoken>=0.7.0            # Token counting
+
+# --- LangChain (RAG pipeline) ------------------------------------------------
+langchain>=0.2.0
+langchain-core>=0.2.0
+langchain-community>=0.2.0
+langchain-ollama>=0.1.0
+langchain-openai>=0.1.0
+
+# --- Web search (fact-checking) ----------------------------------------------
+duckduckgo-search>=6.1.0
+beautifulsoup4>=4.12.0
+lxml>=5.1.0
+requests>=2.31.0
+
+# --- NLP utilities -----------------------------------------------------------
+nltk>=3.8.0
+langdetect>=1.0.9
+langcodes>=3.3.0
+
+# --- Image processing --------------------------------------------------------
+Pillow>=10.1.0
+opencv-python>=4.9.0
+
+# --- PDF / document import ---------------------------------------------------
+PyPDF2>=3.0.1
+python-docx>=1.1.0
+
+# --- Security / auth ---------------------------------------------------------
+cryptography>=42.0.0
+bcrypt>=4.1.0
+PyNaCl>=1.5.0
+
+# --- Data / analytics --------------------------------------------------------
+pandas>=2.1.0
+matplotlib>=3.8.0
+seaborn>=0.13.0
+
+# --- Date / time -------------------------------------------------------------
+python-dateutil>=2.9.0
+pytz>=2024.1
+tzlocal>=5.2
+
+# --- GUI (system tray) -------------------------------------------------------
+pystray>=0.19.5
+
+# --- Utilities ---------------------------------------------------------------
+colorama>=0.4.6
+coloredlogs>=15.0.1
+click>=8.1.7
+tqdm>=4.66.0
+loguru>=0.7.2
+typing_extensions>=4.9.0
+jsonschema>=4.21.0
+marshmallow>=3.21.0
+prometheus-client>=0.20.0
+
+# --- Testing / dev tools -----------------------------------------------------
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+black>=24.0.0
+ruff>=0.4.0
+mypy>=1.8.0
+types-requests>=2.31.0
+types-croniter>=2.0.0
+
+# =============================================================================
+# OPTIONAL — Image generation backends
+# Uncomment the section(s) you need.
+# =============================================================================
+
+# Perchance browser-based image backend (Cloudflare-bypassed via Playwright)
+# Requires: playwright install chromium  (after pip install)
+playwright>=1.45.0
+rebrowser-playwright>=1.45.0   # stealth mode for Cloudflare bypass
+
+# Local FLUX / diffusers pipeline (CUDA GPU required)
+# See flux2kleinpipeline.md for setup instructions.
+# diffusers>=0.30.0
+# gguf>=0.9.0
+# transformers>=4.41.0
+# torch>=2.3.0              # install the CUDA variant from pytorch.org
+
+# Sentence embeddings (alternative to Ollama embeddings)
+# sentence-transformers>=3.0.0
+
+# ChromaDB vector store (alternative to sqlite-vec)
+# chromadb>=0.5.0
