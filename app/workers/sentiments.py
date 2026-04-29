@@ -12,9 +12,19 @@ from app.history_scope import (HISTORY_SCOPE_STANDARD,
                                automated_moderation_allowed_for_scope,
                                inferred_history_scope_for_message,
                                table_has_column)
+from app.utils.llm_json import parse_llm_json
 from app.utils.ollama import generate
 
 SENTIMENT_PROMPT_TEMPLATE = """Analyze the emotional content of this message and respond with valid JSON only.\n\nMessage: \"{message}\"\n\nOutput format:\n{{\n    \"valence\": <float between -1.0 and 1.0>,\n    \"arousal\": <float between 0.0 and 1.0>,\n    \"dominance\": <float between 0.0 and 1.0>,\n    \"emotion_label\": \"<joy|sadness|anger|fear|disgust|surprise|neutral>\",\n    \"confidence\": <float between 0.0 and 1.0>,\n    \"crisis_risk\": <boolean>\n}}"""
+
+
+def _sentiment_model() -> str | None:
+    cfg = settings()
+    return (
+        getattr(cfg, "planner_model", None)
+        or getattr(cfg, "turn_planner_model", None)
+        or cfg.worker_model
+    )
 
 
 def _pending_messages(batch_size: int) -> Iterable[dict]:
@@ -98,11 +108,11 @@ def process_batch(batch_size: int = 10) -> int:
     for msg in _pending_messages(batch_size):
         prompt = SENTIMENT_PROMPT_TEMPLATE.format(message=msg["content"])
         try:
-            _worker_model = settings().worker_model
+            _worker_model = _sentiment_model()
             response = generate(
                 prompt=prompt, model=_worker_model, format="json", options={"temperature": 0.3}
             )
-            sentiment = json.loads(response["text"])
+            sentiment = parse_llm_json(response["text"])
             _store_sentiment(msg["id"], sentiment)
             try:
                 from app.domain.reminders.auto_followups import (

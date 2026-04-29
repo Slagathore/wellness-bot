@@ -35,11 +35,18 @@ class Settings(BaseSettings):
 
     # AI Models
     chat_model: str = "huihui_ai/gemma3n-abliterated:e2b-fp16"
-    vision_model: str = "llava-llama3"
-    # Worker model for background jobs (sentiments, nightly, embeddings prompt-fix).
+    vision_model: str = "mistral-large-3:675b-cloud"
+    # Worker model for local background helpers (reminder text, embeddings prompt-fix, etc.).
     # Defaults to chat_model when unset.  Set this to a local model to avoid
     # burning cloud API quota on automated background processing.
     worker_model: str | None = None
+    # Dedicated model for the hot-path turn planner / sentiment analyzer.
+    planner_model: str | None = "mistral-large-3:675b-cloud"
+    # Backward-compatible alias for older env/config keys.
+    turn_planner_model: str | None = None
+    # Dedicated model for nightly reprocessing and batch profile analysis.
+    nightly_model: str | None = "gemini-3-flash-preview:cloud"
+    turn_planner_timeout_seconds: float = 8.0
 
     # HuggingFace (optional - diffusers also auto-reads ~/.cache/huggingface/token)
     hf_token: str | None = None

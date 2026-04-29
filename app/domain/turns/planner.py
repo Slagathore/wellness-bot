@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Any
 
+from app.feature_flags import enabled as feature_enabled
 from app.orchestrator.context_builder import user_profile_context
 from app.orchestrator.persona_runtime import get_user_personality_name
 from app.rag.service import get_retriever
 from app.utils.web_search import should_search_web
 
+from .llm_analyzer import LLMTurnAnalysis, LLMTurnAnalyzer
 from .models import (
     TurnMemoryCandidate,
     TurnPlan,
@@ -150,6 +154,7 @@ _EMOTION_TERMS = {
     "excited": "excitement",
     "thrilled": "excitement",
 }
+_SENTIMENT_PRIORITY_ORDER = {"normal": 0, "elevated": 1, "high": 2}
 
 
 @dataclass(slots=True)
@@ -164,7 +169,20 @@ class PlannerInputs:
 class TurnPlanner:
     """Cheap heuristics for turn routing and decision gating."""
 
-    def build_plan(self, *, user_id: int, session_id: int | None, message_text: str) -> TurnPlan:
+    def __init__(
+        self,
+        analyzer: LLMTurnAnalyzer | None = None,
+        *,
+        shadow_enabled: bool | None = None,
+        llm_primary_enabled: bool | None = None,
+    ) -> None:
+        self._analyzer = analyzer
+        self._shadow_enabled = shadow_enabled
+        self._llm_primary_enabled = llm_primary_enabled
+
+    def build_plan(
+        self, *, user_id: int, session_id: int | None, message_text: str
+    ) -> TurnPlan:
         personality = get_user_personality_name(user_id)
         profile_ctx = None
         try:
@@ -180,11 +198,29 @@ class TurnPlanner:
         )
         return self._plan(inputs)
 
+    async def build_plan_async(
+        self, *, user_id: int, session_id: int | None, message_text: str
+    ) -> TurnPlan:
+        return await asyncio.to_thread(
+            self.build_plan,
+            user_id=user_id,
+            session_id=session_id,
+            message_text=message_text,
+        )
+
     def _plan(self, inputs: PlannerInputs) -> TurnPlan:
+        total_started = time.perf_counter()
+        heuristic_started = time.perf_counter()
         text = (inputs.message_text or "").strip()
         lowered = text.lower()
         primary_intent = self._classify_intent(lowered)
         sentiment_priority, emotion_label = self._estimate_emotion(lowered)
+        scheduled_event = self._detect_scheduled_event(lowered)
+        timing_question_ok = self._timing_question_ok(
+            lowered,
+            primary_intent=primary_intent,
+            scheduled_event=scheduled_event,
+        )
         allow_media_action = self._media_allowed(lowered, inputs.personality_name)
         allow_reminder_action = self._reminder_allowed(
             lowered,
@@ -240,7 +276,10 @@ class TurnPlanner:
             message_text=text,
             primary_intent=primary_intent,
             sentiment_priority=sentiment_priority,
+            planner_latency_ms=None,
             emotion_label=emotion_label,
+            scheduled_event=scheduled_event,
+            timing_question_ok=timing_question_ok,
             needs_rag=needs_rag,
             needs_live_search_now=needs_live_search_now,
             needs_live_search_followup=needs_live_search_followup,
@@ -258,6 +297,23 @@ class TurnPlanner:
             followup_jobs=followup_jobs,
             reasoning=[],
         )
+        heuristic_latency_ms = round((time.perf_counter() - heuristic_started) * 1000.0, 2)
+        heuristic_summary = self._plan_summary(plan)
+        analysis, llm_latency_ms = self._llm_analysis(inputs, plan)
+        if analysis is not None:
+            llm_summary = self._analysis_summary(analysis)
+            plan.shadow_comparison = self._build_shadow_comparison(
+                heuristic_summary=heuristic_summary,
+                llm_summary=llm_summary,
+                heuristic_latency_ms=heuristic_latency_ms,
+                llm_latency_ms=llm_latency_ms,
+                llm_model=analysis.model_name,
+            )
+        if analysis is not None:
+            if self._llm_primary_active():
+                self._apply_primary_analysis(plan, analysis, inputs.personality_name)
+            else:
+                self._apply_shadow_analysis(plan, analysis)
         if contradictions:
             plan.reasoning.append("profile_contradiction")
         if needs_live_search_now:
@@ -266,7 +322,217 @@ class TurnPlanner:
             plan.reasoning.append("web_search_deferred")
         if needs_rag:
             plan.reasoning.append("rag_needed")
+        plan.planner_latency_ms = round((time.perf_counter() - total_started) * 1000.0, 2)
         return plan
+
+    def _shadow_active(self) -> bool:
+        if self._shadow_enabled is not None:
+            return self._shadow_enabled
+        return feature_enabled("llm_turn_planner_shadow") or feature_enabled(
+            "turn_planner_shadow"
+        )
+
+    def _llm_primary_active(self) -> bool:
+        if self._llm_primary_enabled is not None:
+            return self._llm_primary_enabled
+        return feature_enabled("llm_turn_planner_v1") or feature_enabled(
+            "turn_planner_llm_primary"
+        )
+
+    def _llm_analysis(
+        self,
+        inputs: PlannerInputs,
+        heuristic_plan: TurnPlan,
+    ) -> tuple[LLMTurnAnalysis | None, float | None]:
+        if self._analyzer is None:
+            return None, None
+        if not self._shadow_active() and not self._llm_primary_active():
+            return None, None
+        started = time.perf_counter()
+        try:
+            analysis = self._analyzer.analyze(
+                user_id=inputs.user_id,
+                session_id=inputs.session_id,
+                message_text=inputs.message_text,
+                personality_name=inputs.personality_name,
+                heuristic_plan=heuristic_plan.to_dict(),
+                profile_context_text=inputs.profile_context_text,
+            )
+            latency_ms = round((time.perf_counter() - started) * 1000.0, 2)
+            return analysis, latency_ms
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Turn planner LLM analysis failed: %s", exc)
+            return None, None
+
+    def _apply_shadow_analysis(
+        self,
+        plan: TurnPlan,
+        analysis: LLMTurnAnalysis,
+    ) -> None:
+        plan.planner_source = "heuristic+llm_shadow"
+        self._apply_sentiment_fields(plan, analysis)
+        self._merge_reasoning(plan, analysis.reasoning, "llm_shadow_enrichment")
+
+    def _apply_primary_analysis(
+        self,
+        plan: TurnPlan,
+        analysis: LLMTurnAnalysis,
+        personality_name: str,
+    ) -> None:
+        plan.planner_source = "llm_primary"
+        self._apply_sentiment_fields(plan, analysis)
+        if analysis.primary_intent:
+            plan.primary_intent = analysis.primary_intent
+        if analysis.sentiment_priority:
+            plan.sentiment_priority = analysis.sentiment_priority
+        if analysis.emotion_label is not None:
+            plan.emotion_label = analysis.emotion_label
+        plan.crisis_risk = analysis.crisis_risk
+        plan.scheduled_event = analysis.scheduled_event
+        plan.timing_question_ok = analysis.timing_question_ok
+        if analysis.needs_rag is not None:
+            plan.needs_rag = analysis.needs_rag
+        if analysis.needs_live_search_now is not None:
+            plan.needs_live_search_now = analysis.needs_live_search_now
+        if analysis.needs_live_search_followup is not None:
+            plan.needs_live_search_followup = analysis.needs_live_search_followup
+        if analysis.search_query:
+            plan.search_query = analysis.search_query
+        if analysis.search_reason:
+            plan.search_reason = analysis.search_reason
+        if analysis.allow_media_action is not None and personality_name.lower() not in {"downbad"}:
+            plan.allow_media_action = analysis.allow_media_action
+            plan.media_action = "generate_media" if plan.allow_media_action else None
+        if (
+            analysis.allow_reminder_action is not None
+            and personality_name.lower() not in {"downbad", "roleplay"}
+        ):
+            plan.allow_reminder_action = analysis.allow_reminder_action
+            plan.reminder_action = "create_reminder" if plan.allow_reminder_action else None
+        if analysis.clarification_required is not None:
+            plan.clarification_required = analysis.clarification_required
+            plan.clarification_text = analysis.clarification_text
+        self._sync_followup_jobs(plan)
+        self._merge_reasoning(plan, analysis.reasoning, "llm_primary_override")
+
+    def _apply_sentiment_fields(
+        self,
+        plan: TurnPlan,
+        analysis: LLMTurnAnalysis,
+    ) -> None:
+        if analysis.sentiment_priority and (
+            self._priority_rank(analysis.sentiment_priority)
+            >= self._priority_rank(plan.sentiment_priority)
+        ):
+            plan.sentiment_priority = analysis.sentiment_priority
+        if analysis.emotion_label:
+            plan.emotion_label = analysis.emotion_label
+        plan.sentiment_valence = analysis.sentiment_valence
+        plan.sentiment_arousal = analysis.sentiment_arousal
+        plan.sentiment_dominance = analysis.sentiment_dominance
+        plan.sentiment_confidence = analysis.sentiment_confidence
+        plan.crisis_risk = plan.crisis_risk or analysis.crisis_risk
+        plan.scheduled_event = plan.scheduled_event or analysis.scheduled_event
+        plan.timing_question_ok = plan.timing_question_ok or analysis.timing_question_ok
+        if analysis.crisis_risk:
+            plan.sentiment_priority = "high"
+
+    def _merge_reasoning(
+        self,
+        plan: TurnPlan,
+        extra: list[str],
+        fallback_marker: str,
+    ) -> None:
+        merged = list(plan.reasoning)
+        if fallback_marker not in merged:
+            merged.append(fallback_marker)
+        for item in extra:
+            if item not in merged:
+                merged.append(item)
+        plan.reasoning = merged
+
+    @staticmethod
+    def _priority_rank(priority: str) -> int:
+        return _SENTIMENT_PRIORITY_ORDER.get(priority, 0)
+
+    def _plan_summary(self, plan: TurnPlan) -> dict[str, Any]:
+        return {
+            "primary_intent": plan.primary_intent,
+            "sentiment_priority": plan.sentiment_priority,
+            "emotion_label": plan.emotion_label,
+            "needs_rag": plan.needs_rag,
+            "needs_live_search_now": plan.needs_live_search_now,
+            "needs_live_search_followup": plan.needs_live_search_followup,
+            "search_query": plan.search_query,
+            "search_reason": plan.search_reason,
+            "allow_media_action": plan.allow_media_action,
+            "allow_reminder_action": plan.allow_reminder_action,
+            "clarification_required": plan.clarification_required,
+            "clarification_text": plan.clarification_text,
+            "crisis_risk": plan.crisis_risk,
+            "scheduled_event": plan.scheduled_event,
+            "timing_question_ok": plan.timing_question_ok,
+        }
+
+    def _analysis_summary(self, analysis: LLMTurnAnalysis) -> dict[str, Any]:
+        return {
+            "primary_intent": analysis.primary_intent,
+            "sentiment_priority": analysis.sentiment_priority,
+            "emotion_label": analysis.emotion_label,
+            "needs_rag": analysis.needs_rag,
+            "needs_live_search_now": analysis.needs_live_search_now,
+            "needs_live_search_followup": analysis.needs_live_search_followup,
+            "search_query": analysis.search_query,
+            "search_reason": analysis.search_reason,
+            "allow_media_action": analysis.allow_media_action,
+            "allow_reminder_action": analysis.allow_reminder_action,
+            "clarification_required": analysis.clarification_required,
+            "clarification_text": analysis.clarification_text,
+            "crisis_risk": analysis.crisis_risk,
+            "scheduled_event": analysis.scheduled_event,
+            "timing_question_ok": analysis.timing_question_ok,
+        }
+
+    def _build_shadow_comparison(
+        self,
+        *,
+        heuristic_summary: dict[str, Any],
+        llm_summary: dict[str, Any],
+        heuristic_latency_ms: float,
+        llm_latency_ms: float | None,
+        llm_model: str | None,
+    ) -> dict[str, Any]:
+        mismatch_fields = self._mismatch_fields(heuristic_summary, llm_summary)
+        return {
+            "heuristic_summary": heuristic_summary,
+            "llm_summary": llm_summary,
+            "mismatch_fields": mismatch_fields,
+            "heuristic_latency_ms": heuristic_latency_ms,
+            "llm_latency_ms": llm_latency_ms,
+            "llm_model": llm_model,
+        }
+
+    def _mismatch_fields(
+        self,
+        heuristic_summary: dict[str, Any],
+        llm_summary: dict[str, Any],
+    ) -> list[str]:
+        mismatches: list[str] = []
+        for key, heuristic_value in heuristic_summary.items():
+            llm_value = llm_summary.get(key)
+            if llm_value is None:
+                continue
+            if llm_value != heuristic_value:
+                mismatches.append(key)
+        return mismatches
+
+    def _sync_followup_jobs(self, plan: TurnPlan) -> None:
+        jobs = [job for job in plan.followup_jobs if job != "web_search"]
+        if plan.needs_live_search_followup:
+            jobs.append("web_search")
+        if "audit" not in jobs:
+            jobs.append("audit")
+        plan.followup_jobs = jobs
 
     def _search_mode(self, lowered: str, *, reason: str) -> str:
         if any(token in lowered for token in _DEFERRED_SEARCH_HINTS):
@@ -300,6 +566,28 @@ class TurnPlanner:
         if "!" in lowered and len(lowered) > 20:
             return "elevated", None
         return "normal", None
+
+    def _detect_scheduled_event(self, lowered: str) -> bool:
+        has_event = any(token in lowered for token in _REMINDER_EVENT_HINTS)
+        has_future_anchor = any(token in lowered for token in _REMINDER_FUTURE_HINTS)
+        return has_event and has_future_anchor
+
+    def _timing_question_ok(
+        self,
+        lowered: str,
+        *,
+        primary_intent: str,
+        scheduled_event: bool,
+    ) -> bool:
+        if primary_intent == "reminder_request":
+            return False
+        if not scheduled_event:
+            return False
+        if any(token in lowered for token in (" at ", " at\n", " at\t")):
+            return False
+        if re.search(r"\b\d{1,2}(:\d{2})?\s*(am|pm)\b", lowered):
+            return False
+        return True
 
     def _media_allowed(self, lowered: str, personality: str) -> bool:
         if personality.lower() in {"downbad"}:

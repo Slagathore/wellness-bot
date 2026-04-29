@@ -390,14 +390,37 @@ def _turn_plan_prompt_block(turn_plan: TurnPlan | None) -> str:
     planner_notes = [
         f"Turn plan intent: {turn_plan.primary_intent}",
         f"Sentiment priority: {turn_plan.sentiment_priority}",
+        f"Planner source: {turn_plan.planner_source}",
     ]
+    if turn_plan.emotion_label:
+        planner_notes.append(f"Emotion label: {turn_plan.emotion_label}")
+    if turn_plan.sentiment_valence is not None:
+        planner_notes.append(
+            "Structured sentiment: "
+            f"valence={turn_plan.sentiment_valence:.2f}, "
+            f"arousal={float(turn_plan.sentiment_arousal or 0.0):.2f}, "
+            f"dominance={float(turn_plan.sentiment_dominance or 0.0):.2f}, "
+            f"confidence={float(turn_plan.sentiment_confidence or 0.0):.2f}"
+        )
+    if turn_plan.crisis_risk:
+        planner_notes.append("Crisis risk detected: respond supportively and carefully.")
+    if turn_plan.scheduled_event:
+        planner_notes.append("A genuinely scheduled event is likely involved.")
+    if turn_plan.timing_question_ok:
+        planner_notes.append(
+            "If timing matters, ask naturally within the conversational reply rather than as a standalone reminder form."
+        )
     if turn_plan.needs_live_search_now:
         planner_notes.append("User asked for live info; answer with caution.")
     if turn_plan.allow_media_action:
         planner_notes.append("Media generation allowed this turn.")
     else:
         planner_notes.append("Do not emit media tags unless explicitly allowed.")
-    if not turn_plan.allow_reminder_action:
+    if turn_plan.allow_reminder_action:
+        planner_notes.append(
+            "Reminder behavior is allowed, but only suggest or emit reminder actions when they feel contextually natural."
+        )
+    else:
         planner_notes.append("Do not emit reminder tags.")
 
     return "\n\nTURN_PLAN:\n" + "\n".join(planner_notes)

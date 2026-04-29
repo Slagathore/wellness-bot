@@ -34,9 +34,20 @@ from app.domain.turns.audit import append_turn_route
 from app.rag.ingestion import ResourceIngester
 from app.rag.service import get_vector_store
 from app.utils.ollama import generate
+from app.utils.llm_json import parse_llm_json
 from app.utils.text import embed_text
 from app.utils.time_utils import operator_now
 from app.vector_backends import get_backend
+
+
+def _nightly_model() -> str | None:
+    cfg = settings()
+    return (
+        getattr(cfg, "nightly_model", None)
+        or getattr(cfg, "planner_model", None)
+        or getattr(cfg, "turn_planner_model", None)
+        or cfg.worker_model
+    )
 
 
 def _standard_message_scope_sql(message_alias: str = "m") -> tuple[str, str]:
@@ -142,7 +153,7 @@ def optimize_shards() -> None:
 
 
 def reprocess_sentiments(limit: int = 100) -> None:
-    _worker_model = settings().worker_model
+    _worker_model = _nightly_model()
     scope_join, scope_predicate = _standard_message_scope_sql("m")
     with db_ro() as conn:
         rows = conn.execute(
@@ -177,7 +188,7 @@ def reprocess_sentiments(limit: int = 100) -> None:
             response = generate(
                 prompt=prompt, model=_worker_model, format="json", options={"temperature": 0.3}
             )
-            data = json.loads(response["text"])
+            data = parse_llm_json(response["text"])
         except Exception as exc:  # noqa: BLE001
             print(f"[nightly] Sentiment reprocess failed for {row['id']}: {exc}")
             continue
@@ -453,7 +464,11 @@ def _analyze_user_psychological_profile(
         print(f"[nightly] Skipping user {user_id} - conversation sample empty")
         return False
 
-    analysis_model = settings().worker_model or getattr(settings(), "psych_model", None)
+    analysis_model = (
+        getattr(settings(), "nightly_model", None)
+        or getattr(settings(), "psych_model", None)
+        or settings().worker_model
+    )
     try:
         generation = generate_comprehensive_profile(
             conversation_sample,

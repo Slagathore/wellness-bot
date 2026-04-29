@@ -265,6 +265,13 @@ class ConversationService:
                                 "conversation.turn_planner.completed",
                                 primary_intent=turn_plan.primary_intent,
                                 sentiment_priority=turn_plan.sentiment_priority,
+                                planner_source=turn_plan.planner_source,
+                                planner_latency_ms=turn_plan.planner_latency_ms,
+                                shadow_mismatch_count=len(
+                                    (turn_plan.shadow_comparison or {}).get("mismatch_fields", [])
+                                ),
+                                emotion_label=turn_plan.emotion_label,
+                                crisis_risk=turn_plan.crisis_risk,
                                 needs_rag=turn_plan.needs_rag,
                                 needs_live_search_now=turn_plan.needs_live_search_now,
                             )
@@ -344,7 +351,7 @@ class ConversationService:
                 )
                 if self._turn_planner:
                     try:
-                        turn_plan = self._turn_planner.build_plan(
+                        turn_plan = await self._turn_planner.build_plan_async(
                             user_id=db_user_id,
                             session_id=session_id,
                             message_text=msg.text,
@@ -354,6 +361,13 @@ class ConversationService:
                                 "conversation.turn_planner.completed",
                                 primary_intent=turn_plan.primary_intent,
                                 sentiment_priority=turn_plan.sentiment_priority,
+                                planner_source=turn_plan.planner_source,
+                                planner_latency_ms=turn_plan.planner_latency_ms,
+                                shadow_mismatch_count=len(
+                                    (turn_plan.shadow_comparison or {}).get("mismatch_fields", [])
+                                ),
+                                emotion_label=turn_plan.emotion_label,
+                                crisis_risk=turn_plan.crisis_risk,
                                 needs_rag=turn_plan.needs_rag,
                                 needs_live_search_now=turn_plan.needs_live_search_now,
                             )
