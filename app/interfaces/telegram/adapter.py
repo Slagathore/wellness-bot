@@ -1,4 +1,3 @@
-# Rename this file to adapter.py to use it.
 """
 Telegram interface adapter: consumes updates and publishes events,
 and listens for send-reply events to respond.
@@ -1854,6 +1853,7 @@ class TelegramAdapter:
         app.add_handler(CommandHandler("personality", self._on_personality_command))
         app.add_handler(CommandHandler("character", self._on_character_command))
         app.add_handler(CommandHandler("adventure", self._on_adventure_command))
+        app.add_handler(CommandHandler("nsfwpref", self._on_nsfwpref_command))
         app.add_handler(CommandHandler("helpmodes", self._on_helpmodes_command))
         app.add_handler(CommandHandler("onboard", self._on_onboard_command))
 
@@ -2167,6 +2167,14 @@ class TelegramAdapter:
             available = ", ".join(PERSONALITY_MODES.keys())
             await update.message.reply_text(f"❌ Unknown personality: `{mode}`\n\nAvailable: {available}")
             return
+        if mode == "downbad":
+            pref_svc = self._get_preference_service()
+            if not pref_svc.get_nsfw_opt_in(user_id):
+                await update.message.reply_text(
+                    "Downbad mode is locked until you opt into NSFW conversations. "
+                    "Use /nsfwpref enable if you want to unlock it."
+                )
+                return
         success = pm.set_user_personality(user_id, mode)
         if success:
             self._rotate_user_session(user_id, reason=f"personality switch -> {mode}")
@@ -2180,6 +2188,8 @@ class TelegramAdapter:
                 f"• Reminders: {reminders_status}\n\n"
                 "This only affects **your** conversations. Other users have their own personalities!"
             )
+            if mode == "downbad":
+                msg += "\n• Use /nsfwpref to manage intensity, pacing, kinks, and safeword."
             await update.message.reply_text(msg)
         else:
             await update.message.reply_text("❌ Failed to change personality. Please try again.")
@@ -2485,7 +2495,7 @@ class TelegramAdapter:
                     INSERT INTO custom_characters
                         (name, display_name, emoji, system_prompt, temperature,
                          top_p, repeat_penalty, initial_message, creator_user_id, is_global)
-                    VALUES (?, ?, ?, ?, ?, 0.9, 1.1, ?, ?, 0)
+                    VALUES (?, ?, ?, ?, ?, 0.9, 1.12, ?, ?, 0)
                     """,
                     (
                         parsed["name"],
@@ -3422,6 +3432,18 @@ class TelegramAdapter:
                 "Remind them they can say 'bic:' or 'bic: <action>' to return to the story."
             )
 
+        # Inject downbad personality overlay when active
+        try:
+            from app.orchestrator.persona_runtime import \
+                get_user_personality_config
+            _pname, _pcfg = get_user_personality_config(user_id)
+            if _pname == "downbad":
+                _overlay = (_pcfg.get("system_prompt") or "").strip()
+                if _overlay:
+                    system_prompt += f"\n\nPERSONALITY OVERLAY — applies to all characters and narration:\n{_overlay}"
+        except Exception:
+            pass
+
         # Build conversation history — OOC/retcon system messages formatted as annotated turns
         llm_messages = [{"role": "system", "content": system_prompt}]
         for msg in reversed(recent_msgs):
@@ -3529,7 +3551,8 @@ class TelegramAdapter:
             "• /personality creative\n"
             "• /personality therapeutic\n"
             "• /personality workfocus\n"
-            "• /personality roleplay\n\n"
+            "• /personality roleplay\n"
+            "• /personality downbad\n\n"
             "**Standard Modes:**\n"
             "• professional - Formal, structured wellness support\n"
             "• friendly - Warm, casual conversations (default)\n"
@@ -3540,6 +3563,11 @@ class TelegramAdapter:
             "• roleplay - Safe, consensual roleplay scenarios\n"
             "  - Establishes safe words before starting\n"
             "  - ⚠ Proactive reminders are DISABLED in this mode\n\n"
+            "• downbad - Flirty, playful, intimate conversations\n"
+            "  - For adults only, consensual and respectful\n"
+            "  - ⚠ Reminders are DISABLED in this mode\n"
+            "  - Use `/nsfwpref` to unlock and fine-tune settings\n"
+            "  - Enter the mode with `/personality downbad`\n\n"
             f"**Your current mode:** {current_display}"
         )
         keyboard = [
@@ -3554,9 +3582,444 @@ class TelegramAdapter:
             ],
             [
                 InlineKeyboardButton("roleplay", callback_data="personality:roleplay"),
+                InlineKeyboardButton("downbad", callback_data="personality:downbad"),
             ],
         ]
         await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+    def _set_nsfw_opt_in(self, user_id: int, enabled: bool) -> None:
+        value = "true" if enabled else "false"
+        with db_rw() as conn:
+            conn.execute(
+                """
+                INSERT INTO profile_context (user_id, key, value, updated_at)
+                VALUES (?, 'nsfw_opt_in', ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(user_id, key)
+                DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+                """,
+                (user_id, value),
+            )
+            row = conn.execute(
+                "SELECT onboarding_data FROM users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            onboarding = self._safe_json_loads(
+                row["onboarding_data"] if row and row["onboarding_data"] else "{}",
+                {},
+                context="onboarding data",
+            )
+            onboarding["nsfw_opt_in"] = enabled
+            conn.execute(
+                "UPDATE users SET onboarding_data = ? WHERE id = ?",
+                (json.dumps(onboarding), user_id),
+            )
+
+    async def _on_nsfwpref_command(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        if not update.effective_user or not update.message:
+            return
+        from app.features.nsfw_preferences.handlers import (
+            DEFAULT_PREFERENCES, FALSE_WORDS, SUBMODE_OPTIONS, TRUE_WORDS,
+            _merge_defaults, build_root_keyboard, render_summary)
+        user_id = self._ensure_user(update.effective_user)
+        tg_id = update.effective_user.id
+        pref = self._get_preference_service()
+        args = [str(a).strip().lower() for a in (getattr(context, "args", []) or [])]
+
+        # Load the full preference set (feature module handles defaults)
+        prefs = pref.load_nsfw_preferences(user_id, tg_id)
+        prefs = _merge_defaults(prefs)
+        prefs["nsfw_opt_in"] = bool(pref.get_nsfw_opt_in(user_id))
+
+        if not args:
+            # Show the full interactive menu
+            summary = render_summary(prefs)
+            keyboard = build_root_keyboard(prefs)
+            await update.message.reply_text(summary, reply_markup=keyboard)
+            return
+
+        cmd = args[0]
+        if cmd in TRUE_WORDS:
+            self._set_nsfw_opt_in(user_id, True)
+            await update.message.reply_text(
+                "NSFW preferences enabled. You can now use /personality downbad."
+            )
+            return
+        if cmd in FALSE_WORDS:
+            self._set_nsfw_opt_in(user_id, False)
+            await update.message.reply_text(
+                "NSFW preferences disabled. Downbad mode is now locked."
+            )
+            return
+        if cmd == "reset":
+            import copy
+            prefs = copy.deepcopy(DEFAULT_PREFERENCES)
+            prefs["nsfw_opt_in"] = pref.get_nsfw_opt_in(user_id)
+            with db_rw() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO profile_context (user_id, key, value, updated_at)
+                    VALUES (?, 'nsfw_preferences', ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(user_id, key)
+                    DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (user_id, json.dumps(prefs)),
+                )
+            await update.message.reply_text("NSFW preference profile reset to defaults.")
+            return
+        if cmd == "kinks":
+            await self._handle_nsfw_text_list(update, user_id, tg_id, prefs, "kinks", args[1:])
+            return
+        if cmd in {"limit", "limits"}:
+            await self._handle_nsfw_text_list(update, user_id, tg_id, prefs, "hard_limits", args[1:])
+            return
+        if cmd == "soft":
+            await self._handle_nsfw_text_list(update, user_id, tg_id, prefs, "soft_limits", args[1:])
+            return
+        if cmd == "safeword":
+            if len(args) < 2:
+                await update.message.reply_text("Usage: /nsfwpref safeword <word>")
+                return
+            import copy
+            updated = copy.deepcopy(prefs)
+            updated["safe_word"] = args[1]
+            self._save_nsfw_prefs(user_id, tg_id, updated)
+            await update.message.reply_text(f"Safe word set to {args[1]}.")
+            return
+        if cmd == "story":
+            if len(args) < 2:
+                await update.message.reply_text("Usage: /nsfwpref story <description>")
+                return
+            import copy
+            updated = copy.deepcopy(prefs)
+            updated["story_setting"] = " ".join(args[1:])
+            self._save_nsfw_prefs(user_id, tg_id, updated)
+            await update.message.reply_text("Story preference updated.")
+            return
+        if cmd == "mode":
+            if len(args) < 2:
+                await update.message.reply_text("Usage: /nsfwpref mode standard|roleplay")
+                return
+            mode = args[1].strip().lower()
+            valid_modes = {value for value, _label, _desc in SUBMODE_OPTIONS}
+            if mode not in valid_modes:
+                await update.message.reply_text(
+                    "Invalid mode. Use /nsfwpref mode standard or /nsfwpref mode roleplay"
+                )
+                return
+            import copy
+            updated = copy.deepcopy(prefs)
+            updated["downbad_submode"] = mode
+            self._save_nsfw_prefs(user_id, tg_id, updated)
+            await update.message.reply_text(
+                "Downbad submode set to Roleplay." if mode == "roleplay" else "Downbad submode set to Standard."
+            )
+            return
+
+        await update.message.reply_text(
+            "Not sure what you mean. Try /nsfwpref for the full interactive menu."
+        )
+
+    def _save_nsfw_prefs(self, user_id: int, tg_id: int, prefs: dict) -> None:
+        with db_rw() as conn:
+            conn.execute(
+                """INSERT INTO profile_context (user_id, key, value, updated_at)
+                   VALUES (?, 'nsfw_preferences', ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(user_id, key)
+                   DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP""",
+                (user_id, json.dumps(prefs)),
+            )
+
+    async def _handle_nsfw_text_list(
+        self, update: Update, user_id: int, tg_id: int,
+        prefs: dict, list_key: str, args: list,
+    ) -> None:
+        import copy
+        msg = update.message
+        if not msg:
+            return
+        if len(args) < 2:
+            await msg.reply_text(f"Usage: /nsfwpref {list_key.replace('_', ' ')} add|remove <text>")
+            return
+        action = args[0].lower()
+        value = " ".join(args[1:])
+        updated = copy.deepcopy(prefs)
+        items = updated.setdefault(list_key, [])
+        if action == "add":
+            if value not in items:
+                items.append(value)
+                self._save_nsfw_prefs(user_id, tg_id, updated)
+                await msg.reply_text(f"Added: {value}")
+            else:
+                await msg.reply_text("Already on the list!")
+        elif action == "remove":
+            if value in items:
+                items.remove(value)
+                self._save_nsfw_prefs(user_id, tg_id, updated)
+                await msg.reply_text(f"Removed: {value}")
+            else:
+                await msg.reply_text("Not on the list.")
+        else:
+            await msg.reply_text(f"Usage: /nsfwpref {list_key.replace('_', ' ')} add|remove <text>")
+
+    async def _handle_nsfw_callback(
+        self, query: Any, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Handle inline keyboard callbacks for NSFW preferences (nsfw| prefix)."""
+        import copy
+
+        from app.features.nsfw_preferences.handlers import (
+            BOUNDARY_OPTIONS, CALLBACK_PREFIX, DEFAULT_PREFERENCES,
+            DOMINANCE_OPTIONS, GENDER_OPTIONS, INTENSITY_OPTIONS,
+            KINK_PRESET_OPTIONS, PACING_OPTIONS, ROLEPLAY_OPTIONS,
+            STYLE_OPTIONS, SUBMODE_OPTIONS, VERBOSITY_OPTIONS,
+            _confirm_reset_keyboard, _limits_keyboard, _merge_defaults,
+            _multi_choice_keyboard, _rules_keyboard, _single_choice_keyboard,
+            build_root_keyboard, render_summary)
+        user = query.from_user or update.effective_user
+        if not user:
+            return
+        user_id = self._ensure_user(user)
+        tg_id = user.id
+        pref = self._get_preference_service()
+
+        prefs = pref.load_nsfw_preferences(user_id, tg_id)
+        prefs = _merge_defaults(prefs)
+        prefs["nsfw_opt_in"] = bool(pref.get_nsfw_opt_in(user_id))
+
+        data = (query.data or "")
+        if not data.startswith(CALLBACK_PREFIX):
+            return
+        payload = data[len(CALLBACK_PREFIX):]
+        parts = payload.split("|")
+        action = parts[0]
+        rest = parts[1:]
+
+        try:
+            if action == "shortcut":
+                target = rest[0] if rest else ""
+                if target == "characters":
+                    await self._show_character_hub(
+                        target_message=query.message,
+                        user_id=user_id,
+                        edit=True,
+                    )
+                elif target == "adventures":
+                    await self._show_adventure_hub(
+                        target_message=query.message,
+                        context=context,
+                        user_id=user_id,
+                        edit=True,
+                    )
+                elif target == "add_character":
+                    if context.user_data and context.user_data.get("active_adventure"):
+                        await self._show_adventure_character_picker(
+                            target_message=query.message,
+                            user_id=user_id,
+                            edit=True,
+                        )
+                    else:
+                        await self._show_character_hub(
+                            target_message=query.message,
+                            user_id=user_id,
+                            edit=True,
+                        )
+                elif target == "fromchat":
+                    result_text, adv_id = await self._create_adventure_from_current_chat(
+                        user_id=user_id,
+                        context=context,
+                    )
+                    await query.edit_message_text(
+                        result_text,
+                        parse_mode="Markdown",
+                        reply_markup=self._build_adventure_hub_keyboard(active_adventure=adv_id),
+                    )
+                return
+
+            if action == "menu":
+                section = rest[0] if rest else "summary"
+                if section == "summary":
+                    await query.edit_message_text(
+                        render_summary(prefs), reply_markup=build_root_keyboard(prefs))
+                elif section == "close":
+                    await query.delete_message()
+                elif section == "intensity":
+                    await query.edit_message_text(
+                        "Choose your preferred intensity:",
+                        reply_markup=_single_choice_keyboard(
+                            "content_intensity", INTENSITY_OPTIONS,
+                            prefs.get("content_intensity", "moderate")))
+                elif section == "style":
+                    await query.edit_message_text(
+                        "How should Mira engage?",
+                        reply_markup=_single_choice_keyboard(
+                            "interaction_style", STYLE_OPTIONS,
+                            prefs.get("interaction_style", "playful_teasing")))
+                elif section == "submode":
+                    await query.edit_message_text(
+                        "Choose your downbad submode:",
+                        reply_markup=_single_choice_keyboard(
+                            "downbad_submode", SUBMODE_OPTIONS,
+                            prefs.get("downbad_submode", "standard")))
+                elif section == "roleplay":
+                    await query.edit_message_text(
+                        "Pick your favorite scenarios (toggle on/off):",
+                        reply_markup=_multi_choice_keyboard(
+                            "roleplay", ROLEPLAY_OPTIONS,
+                            prefs.get("roleplay_scenarios", [])))
+                elif section == "kinks":
+                    await query.edit_message_text(
+                        "Select interests (toggle on/off):",
+                        reply_markup=_multi_choice_keyboard(
+                            "kinks", KINK_PRESET_OPTIONS, prefs.get("kinks", [])))
+                elif section == "boundaries":
+                    await query.edit_message_text(
+                        "Set your hard limits:",
+                        reply_markup=_limits_keyboard(
+                            "hard_limits", BOUNDARY_OPTIONS,
+                            prefs.get("hard_limits", []), "hard_limit"))
+                elif section == "soft_limits":
+                    await query.edit_message_text(
+                        "Tag softer boundaries:",
+                        reply_markup=_limits_keyboard(
+                            "soft_limits", BOUNDARY_OPTIONS,
+                            prefs.get("soft_limits", []), "soft_limit"))
+                elif section == "gender":
+                    kb_rows = []
+                    for val, label in GENDER_OPTIONS:
+                        pfx = "✅ " if prefs.get("user_gender") == val else "⚪ "
+                        kb_rows.append([InlineKeyboardButton(
+                            pfx + label, callback_data=f"{CALLBACK_PREFIX}set|user_gender|{val}")])
+                    for val, label in GENDER_OPTIONS:
+                        pfx = "✅ " if prefs.get("bot_gender", "female") == val else "⚪ "
+                        kb_rows.append([InlineKeyboardButton(
+                            pfx + f"Mira as {label}", callback_data=f"{CALLBACK_PREFIX}set|bot_gender|{val}")])
+                    kb_rows.append([InlineKeyboardButton("Back", callback_data=f"{CALLBACK_PREFIX}menu|summary")])
+                    await query.edit_message_text("Who are we roleplaying as?",
+                                                  reply_markup=InlineKeyboardMarkup(kb_rows))
+                elif section == "dynamics":
+                    kb_rows = []
+                    for val, label, _ in DOMINANCE_OPTIONS:
+                        pfx = "✅ " if prefs.get("dominance_preference") == val else "⚪ "
+                        kb_rows.append([InlineKeyboardButton(
+                            pfx + f"Dominance: {label}",
+                            callback_data=f"{CALLBACK_PREFIX}set|dominance_preference|{val}")])
+                    for val, label in PACING_OPTIONS:
+                        pfx = "✅ " if prefs.get("pacing", "medium") == val else "⚪ "
+                        kb_rows.append([InlineKeyboardButton(
+                            pfx + f"Pacing: {label}", callback_data=f"{CALLBACK_PREFIX}set|pacing|{val}")])
+                    for val, label in VERBOSITY_OPTIONS:
+                        pfx = "✅ " if prefs.get("verbosity", "medium") == val else "⚪ "
+                        kb_rows.append([InlineKeyboardButton(
+                            pfx + f"Verbosity: {label}", callback_data=f"{CALLBACK_PREFIX}set|verbosity|{val}")])
+                    kb_rows.append([InlineKeyboardButton("Back", callback_data=f"{CALLBACK_PREFIX}menu|summary")])
+                    await query.edit_message_text("Set the dynamic and pacing:",
+                                                  reply_markup=InlineKeyboardMarkup(kb_rows))
+                elif section == "rules":
+                    await query.edit_message_text("Scene rules & safety:",
+                                                  reply_markup=_rules_keyboard(prefs))
+                elif section == "reset":
+                    await query.edit_message_text("Reset everything?",
+                                                  reply_markup=_confirm_reset_keyboard())
+                return
+
+            if action == "toggle":
+                category = rest[0] if rest else "access"
+                updated = copy.deepcopy(prefs)
+                if category == "access":
+                    updated["nsfw_opt_in"] = not prefs.get("nsfw_opt_in", False)
+                    self._set_nsfw_opt_in(user_id, updated["nsfw_opt_in"])
+                else:
+                    updated[category] = not prefs.get(category, False)
+                self._save_nsfw_prefs(user_id, tg_id, updated)
+                await query.edit_message_text(
+                    render_summary(updated), reply_markup=build_root_keyboard(updated))
+                return
+
+            if action == "set":
+                category = rest[0]
+                value = rest[1]
+                updated = copy.deepcopy(prefs)
+                updated[category] = value
+                self._save_nsfw_prefs(user_id, tg_id, updated)
+                await query.edit_message_text(
+                    render_summary(updated), reply_markup=build_root_keyboard(updated))
+                return
+
+            if action == "toggle_multi":
+                category = rest[0]
+                value = rest[1]
+                updated = copy.deepcopy(prefs)
+                items = updated.setdefault(category, [])
+                if value in items:
+                    items.remove(value)
+                else:
+                    items.append(value)
+                self._save_nsfw_prefs(user_id, tg_id, updated)
+                # Re-show the same sub-menu
+                menu = "roleplay" if category == "roleplay_scenarios" else category
+                if menu == "roleplay":
+                    await query.edit_message_text(
+                        "Pick your favorite scenarios (toggle on/off):",
+                        reply_markup=_multi_choice_keyboard(
+                            "roleplay", ROLEPLAY_OPTIONS, updated.get("roleplay_scenarios", [])))
+                elif menu == "kinks":
+                    await query.edit_message_text(
+                        "Select interests (toggle on/off):",
+                        reply_markup=_multi_choice_keyboard(
+                            "kinks", KINK_PRESET_OPTIONS, updated.get("kinks", [])))
+                return
+
+            if action == "toggle_limit":
+                category = rest[0]
+                value = rest[1]
+                updated = copy.deepcopy(prefs)
+                items = updated.setdefault(category, [])
+                if value in items:
+                    items.remove(value)
+                else:
+                    items.append(value)
+                self._save_nsfw_prefs(user_id, tg_id, updated)
+                if category == "hard_limits":
+                    await query.edit_message_text(
+                        "Set your hard limits:",
+                        reply_markup=_limits_keyboard(
+                            "hard_limits", BOUNDARY_OPTIONS, updated.get("hard_limits", []), "hard_limit"))
+                else:
+                    await query.edit_message_text(
+                        "Tag softer boundaries:",
+                        reply_markup=_limits_keyboard(
+                            "soft_limits", BOUNDARY_OPTIONS, updated.get("soft_limits", []), "soft_limit"))
+                return
+
+            if action == "prompt":
+                category = rest[0] if rest else ""
+                prompts = {
+                    "roleplay": "roleplay scenario", "kinks": "kink or interest",
+                    "hard_limit": "hard limit", "soft_limit": "soft limit",
+                    "safe_word": "new safe word", "story_setting": "story description",
+                }
+                await query.message.reply_text(
+                    f"Send the {prompts.get(category, 'preference')} now as a reply.")
+                return
+
+            if action == "reset":
+                sub = rest[0] if rest else ""
+                if sub == "confirm":
+                    await query.edit_message_text("Reset everything?",
+                                                  reply_markup=_confirm_reset_keyboard())
+                elif sub == "confirm_yes":
+                    fresh = copy.deepcopy(DEFAULT_PREFERENCES)
+                    fresh["nsfw_opt_in"] = prefs.get("nsfw_opt_in", False)
+                    self._save_nsfw_prefs(user_id, tg_id, fresh)
+                    await query.edit_message_text(
+                        "Reset complete. Back to defaults.",
+                        reply_markup=build_root_keyboard(fresh))
+                return
+
+        except Exception as exc:
+            logger.exception("Error handling NSFW callback: %s", exc)
 
     async def _on_onboard_command(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -3795,15 +4258,19 @@ class TelegramAdapter:
             try:
                 val = float(args[2])
             except ValueError:
-                await update.message.reply_text(f"❌ Invalid value: `{args[2]}` — must be a number.")
+                await update.message.reply_text(
+                    f"❌ Invalid value: `{args[2]}` — must be a number."
+                )
                 return
             lo, hi = LLM_PARAM_RANGES[param]
             if val < lo or val > hi:
-                await update.message.reply_text(f"❌ `{param}` must be between {lo} and {hi}.")
+                await update.message.reply_text(
+                    f"❌ `{param}` must be between {lo} and {hi}."
+                )
                 return
-            # For integer params, convert
             if param in ("top_k", "num_ctx", "num_predict"):
                 val = int(val)
+
             # Load existing, merge, save
             current = self._load_user_llm_settings(user_id)
             current[param] = val
@@ -3835,19 +4302,27 @@ class TelegramAdapter:
     async def _show_current_settings(self, update: Update, user_id: int) -> None:
         if not update.message:
             return
-        from app.domain.conversation.pipeline import (LLM_PARAM_RANGES,
-                                                      resolve_llm_options)
+        from app.domain.conversation.pipeline import (
+            LLM_PARAM_RANGES,
+            resolve_llm_options,
+        )
         from app.orchestrator.persona_runtime import (
             get_user_personality_config, get_user_personality_name)
 
         personality_name = get_user_personality_name(user_id)
         _, personality_config = get_user_personality_config(user_id)
-        effective = resolve_llm_options(user_id, personality_config, personality_name)
+        current_model = resolve_user_model(user_id) or settings().chat_model
+        effective = resolve_llm_options(
+            user_id,
+            personality_config,
+            personality_name,
+        )
         user_overrides = self._load_user_llm_settings(user_id)
 
         lines = [
             f"⚙️ **Your LLM Settings**",
             f"Personality: **{personality_name}**",
+            f"Model: **{current_model}**",
             "",
         ]
         for param in LLM_PARAM_RANGES:
@@ -5020,7 +5495,9 @@ class TelegramAdapter:
             await self._on_journal_command(update, context)
         elif data == "journal_start":
             context.user_data["journal_awaiting_entry"] = True
-            context.user_data["journal_prompt"] = (query.message.text if query.message else "")
+            context.user_data["journal_prompt"] = (
+                getattr(query.message, "text", "") if query.message else ""
+            )
             await query.edit_message_text(
                 "✏ Great! Start typing your thoughts. I'm here to listen without judgment.\n\n"
                 "Your next message will be saved as your journal entry."
@@ -5569,6 +6046,14 @@ class TelegramAdapter:
         if user_source is None:
             return
         user_id = self._ensure_user(user_source)
+        if mode == "downbad":
+            pref_svc = self._get_preference_service()
+            if not pref_svc.get_nsfw_opt_in(user_id):
+                await query.edit_message_text(
+                    "Downbad mode is locked until you opt into NSFW conversations. "
+                    "Use /nsfwpref enable to unlock it."
+                )
+                return
         pm = self._get_personality_manager()
         pm.set_user_personality(user_id, mode)
         self._rotate_user_session(user_id, reason=f"personality callback -> {mode}")

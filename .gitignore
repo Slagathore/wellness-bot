@@ -81,14 +81,3 @@ htmlcov/
 
 # Legacy files (if you archive them)
 archive/
-
-# Downbad / NSFW files — excluded from public repo
-# Sanitized RenameMeTo* copies are committed instead.
-app/personality/modes.py
-app/history_scope.py
-app/orchestrator/persona_runtime.py
-app/runtime/services/preferences.py
-app/onboarding/flow.py
-app/interfaces/telegram/adapter.py
-app/features/nsfw_preferences/
-tests/test_downbad_prompt_history.py

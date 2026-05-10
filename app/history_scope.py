@@ -1,5 +1,4 @@
-# Rename this file to history_scope.py to use it.
-"""History scope helpers for separating standard and roleplay data."""
+"""History scope helpers for separating standard, roleplay, and downbad data."""
 
 from __future__ import annotations
 
@@ -9,10 +8,12 @@ from app.db import db_ro
 
 HISTORY_SCOPE_STANDARD = "standard"
 HISTORY_SCOPE_ROLEPLAY = "roleplay"
+HISTORY_SCOPE_DOWNBAD = "downbad"
 
 VALID_HISTORY_SCOPES = {
     HISTORY_SCOPE_STANDARD,
     HISTORY_SCOPE_ROLEPLAY,
+    HISTORY_SCOPE_DOWNBAD,
 }
 
 
@@ -27,6 +28,8 @@ def history_scope_for_personality(personality_name: str | None) -> str:
     lowered = str(personality_name or "").strip().lower()
     if lowered == HISTORY_SCOPE_ROLEPLAY:
         return HISTORY_SCOPE_ROLEPLAY
+    if lowered == HISTORY_SCOPE_DOWNBAD:
+        return HISTORY_SCOPE_DOWNBAD
     return HISTORY_SCOPE_STANDARD
 
 

@@ -1,4 +1,3 @@
-# Rename this file to flow.py to use it.
 """Guided onboarding flow for new Telegram users."""
 
 from __future__ import annotations
@@ -10,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from app.db import db_ro, db_rw
 from app.domain.reminders.timezone import normalize_user_local_reminder_time
+from app.feature_flags import enabled
 from app.utils.ollama import generate
 from app.utils.time_utils import (
     OPERATOR_TZ_NAME,
@@ -103,6 +103,13 @@ SLEEP_SCHEDULE_PROMPT = (
     "What time do you usually go to sleep and wake up?\n"
     "A natural reply is fine, like 'Usually around 11:30pm and I wake up at 7am.' "
     "You can also say 'skip'."
+)
+
+NSFW_PROMPT = (
+    "Would you like to unlock the spicy/NSFW personality mode (Downbad)?\n"
+    "1) Yes - unlock it\n"
+    "2) No thanks (default)\n\n"
+    "You can change this anytime later with /nsfwpref."
 )
 
 REMINDER_TYPE_CHOICES: List[Tuple[str, str]] = [
@@ -378,6 +385,28 @@ def _parse_personality(reply: str) -> Optional[str]:
     return None
 
 
+def _parse_nsfw_preference(reply: str) -> Optional[bool]:
+    token = reply.strip().lower()
+    yes_tokens = {"1", "yes", "y", "enable", "enabled", "unlock", "allow", "true"}
+    no_tokens = {
+        "2",
+        "no",
+        "n",
+        "disable",
+        "disabled",
+        "keep off",
+        "no thanks",
+        "nope",
+        "false",
+        "skip",
+    }
+    if token in yes_tokens:
+        return True
+    if token in no_tokens:
+        return False
+    return None
+
+
 def _parse_times(text: str) -> List[Tuple[int, int]]:
     times: List[Tuple[int, int]] = []
     for match in TIME_PATTERN.finditer(text):
@@ -576,6 +605,21 @@ class OnboardingFlow:
             if not personality:
                 return "Please choose 1-4 so I know the tone you prefer."
             responses["personality_mode"] = personality
+            if enabled("nsfw_preferences"):
+                state["current_step"] = "nsfw_preference"
+                self._save_state(db_user_id, state)
+                return NSFW_PROMPT
+            state["current_step"] = "preferred_name"
+            self._save_state(db_user_id, state)
+            return NAME_PROMPT
+        if step == "nsfw_preference":
+            preference = _parse_nsfw_preference(message)
+            if preference is None:
+                return (
+                    "Let me know if you want NSFW/downbad mode unlocked.\n"
+                    "Reply with 1 (yes) or 2 (no), or say 'skip' to keep it locked."
+                )
+            responses["nsfw_opt_in"] = bool(preference)
             state["current_step"] = "preferred_name"
             self._save_state(db_user_id, state)
             return NAME_PROMPT
@@ -781,6 +825,8 @@ class OnboardingFlow:
         )
         responses["timezone_offset_minutes"] = tz_offset_minutes
         responses["timezone_label"] = timezone_label
+        if "nsfw_opt_in" not in responses:
+            responses["nsfw_opt_in"] = False
 
         feature_flags = self._build_feature_flags(responses)
         reminder_summary = self._create_reminders(
@@ -1307,6 +1353,9 @@ class OnboardingFlow:
             ("wellness_goals", responses.get("wellness_goals")),
             ("support_preferences", responses.get("support_preferences", "")),
         ]
+        nsfw_pref = responses.get("nsfw_opt_in")
+        if nsfw_pref is not None:
+            base_entries.append(("nsfw_opt_in", "true" if nsfw_pref else "false"))
         reminder_types = responses.get("reminder_types", [])
         if reminder_types:
             base_entries.append(("reminder_preferences", ", ".join(reminder_types)))
@@ -1356,6 +1405,7 @@ class OnboardingFlow:
             "usual_wake_time": responses.get("usual_wake_time"),
             "wellness_goals": responses.get("wellness_goals"),
             "support_preferences": responses.get("support_preferences"),
+            "nsfw_opt_in": responses.get("nsfw_opt_in"),
             "reminders_created": reminder_summary,
         }
         return summary
@@ -1403,6 +1453,10 @@ class OnboardingFlow:
         support_line = (
             f"- Support preferences: {support_pref}\n" if support_pref else ""
         )
+        nsfw_enabled = bool(responses.get("nsfw_opt_in"))
+        nsfw_line = "- NSFW (Downbad) access: {}\n".format(
+            "Unlocked" if nsfw_enabled else "Locked (use /nsfwpref to unlock)"
+        )
         reminder_lines = (
             "\n".join(f"  - {item}" for item in reminder_summary)
             if reminder_summary
@@ -1420,6 +1474,7 @@ class OnboardingFlow:
             f"- Check-ins: {check_in}\n"
             f"{pronouns_line}"
             f"{support_line}"
+            f"{nsfw_line}"
             f"- Active features: {feature_text}\n"
             f"- Preferred interaction style: {personality}\n"
             "- Reminders scheduled:\n"
