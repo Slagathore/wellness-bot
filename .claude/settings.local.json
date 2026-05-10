@@ -21,7 +21,18 @@
       "Bash(gh auth *)",
       "Bash(git init *)",
       "Bash(git add *)",
-      "Bash(git -C c:/Users/Cole/CodeStuff/soph_projects/wellness_bot_V1.0 status)"
+      "Bash(git -C c:/Users/Cole/CodeStuff/soph_projects/wellness_bot_V1.0 status)",
+      "Bash(git -C c:/Users/Cole/CodeStuff/soph_projects/wellness_bot_V1.0 branch -a)",
+      "Bash(git -C c:/Users/Cole/CodeStuff/soph_projects/wellness_bot_V1.0 remote -v)",
+      "Bash(git -C c:/Users/Cole/CodeStuff/soph_projects/wellness_bot_V1.0 log --oneline -5)",
+      "Bash(git -C c:/Users/Cole/CodeStuff/soph_projects/wellness_bot_V1.0 log origin/master..HEAD --oneline)",
+      "Bash(git -C c:/Users/Cole/CodeStuff/soph_projects/wellness_bot_V1.0 fetch origin)",
+      "Bash(git -C c:/Users/Cole/CodeStuff/soph_projects/wellness_bot_V1.0 log HEAD..origin/master --oneline)",
+      "Bash(git -C c:/Users/Cole/CodeStuff/soph_projects/wellness_bot_V1.0 push --dry-run origin master)",
+      "Bash(git -C c:/Users/Cole/CodeStuff/soph_projects/wellness_bot_V1.0 branch -vv)",
+      "Bash(git -C c:/Users/Cole/CodeStuff/soph_projects/wellness_bot_V1.0 config --get branch.master.remote)",
+      "Bash(git -C c:/Users/Cole/CodeStuff/soph_projects/wellness_bot_V1.0 config --get branch.master.merge)",
+      "Bash(git -C c:/Users/Cole/CodeStuff/soph_projects/wellness_bot_V1.0 push -u origin master)"
     ],
     "deny": [],
     "ask": []
