@@ -31,6 +31,7 @@ from app.core.events import event_bus
 from app.db import db_ro, db_rw
 from app.domain import events
 from app.domain.conversation.service import UserMessage
+from app.domain.safety.resources import CRISIS_RESOURCE_MESSAGE
 from app.domain.turns.audit import append_turn_route, build_route_entry, create_turn_audit
 from app.feature_flags import enabled
 from app.history_scope import history_scope_for_user, table_has_column
@@ -6520,7 +6521,8 @@ class TelegramAdapter:
             return False
 
         try:
-            if not safety_filter.allow(db_user_id, text):
+            decision = safety_filter.evaluate(db_user_id, text)
+            if decision.rate_limited:
                 audit_id: int | None = None
                 try:
                     audit_id = create_turn_audit(
@@ -6566,8 +6568,14 @@ class TelegramAdapter:
         except Exception as exc:  # noqa: BLE001
             logger.debug("Safety filter failed in fast path: %s", exc)
 
+        # Crisis detection always runs (every scope) and never blocks the
+        # message; on a hit we send crisis resources immediately, then continue
+        # to a normal empathetic reply below.
         try:
-            safety_service.inspect_message(user_id=db_user_id, chat_id=chat_id, text=text)
+            if safety_service.inspect_message(
+                user_id=db_user_id, chat_id=chat_id, text=text
+            ):
+                await self._send_long_message(chat_id, CRISIS_RESOURCE_MESSAGE)
         except Exception as exc:  # noqa: BLE001
             logger.debug("Safety inspect failed in fast path: %s", exc)
 

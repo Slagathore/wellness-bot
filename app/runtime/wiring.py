@@ -25,7 +25,9 @@ from app.domain.onboarding.service import OnboardingService
 from app.domain.onboarding.gate import OnboardingGate, register_onboarding_gate
 from app.domain.safety.filter import SafetyFilter
 from app.domain.safety.service import SafetyService
-from app.domain.safety.handler import SafetyEventHandler, register_safety_handler
+from app.domain.safety.handler import (CrisisAlertHandler, SafetyEventHandler,
+                                        register_crisis_alert_handler,
+                                        register_safety_handler)
 from app.infra.db.moderation_repo import ModerationRepository
 from app.infra.db.reminders_repo import SqliteReminderRepository
 from app.infra.db.conversation_repo import SqliteConversationRepository
@@ -198,6 +200,7 @@ def register_event_handlers() -> None:
 
     register_onboarding_gate(onboarding_gate)
     register_safety_handler(safety_handler)
+    register_crisis_alert_handler(CrisisAlertHandler())
     register_conversation_handler(conv_handler)
     event_bus.subscribe(events.EVENT_REMINDER_DUE, _handle_reminder_due, mode="async")
     event_bus.subscribe(events.EVENT_CHECKIN_DUE, _handle_checkin_due, mode="async")

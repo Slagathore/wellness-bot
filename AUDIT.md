@@ -31,6 +31,7 @@ Ambitious, genuinely featureful product (~58k LOC) that is **mid-rewrite and nev
 3. **`EVENT_CRISIS_DETECTED` has zero subscribers** — even when it fires, the only effect is one DB row awaiting manual review. No real-time escalation.
 4. **Crisis resources (988, Crisis Text Line, Trans Lifeline) exist only as a RAG document** — delivery depends on vector similarity surfacing that doc, not a guaranteed path.
 5. `tests/test_e2e_crisis.py` hand-inserts DB rows instead of exercising the filter/handler, so none of the above was ever caught.
+5b. **(Found while fixing)** Even when `inspect_message` *did* run, it inserted the crisis event with `severity = 7`, but `moderation_events` has `CHECK (severity BETWEEN 1 AND 5)` — so the insert silently failed (swallowed by the repo) and the crisis was **never persisted**, independent of the short-circuit. The batch workers correctly use `5`. Fixed to `5`.
 
 ### P1 — Security (admin panel)
 
@@ -69,12 +70,12 @@ Solid, coherent ops panel (B/B+): consistent dark design system, strong informat
 
 ### Immediate — in progress
 
-- ◐ **Crisis path fix**
-  - ☐ Split `SafetyFilter` into a rate-limit-only gate; return a structured decision.
-  - ☐ Make `SafetyService.inspect_message` run in **all** scopes and return whether a crisis was flagged.
-  - ☐ Send a real crisis-resource message (988 / 741741 / Trans Lifeline / 911) on detection, then continue to a normal empathetic reply — in both the fast path and the event-bus path.
-  - ☐ Add a subscriber to `EVENT_CRISIS_DETECTED` that logs a structured real-time WARNING (escalation hook).
-  - ☐ Add a real test that drives the filter + service (incl. `downbad`/`roleplay` scope) instead of hand-inserting rows.
+- ☑ **Crisis path fix** (commit `dae…`)
+  - ☑ Split `SafetyFilter` into a rate-limit-only gate returning a structured `SafetyDecision`; a crisis never blocks the message.
+  - ☑ Made `SafetyService.inspect_message` run in **all** scopes and return whether a crisis was flagged; fixed the `severity 7 → 5` CHECK-constraint bug.
+  - ☑ Send the real crisis-resource message (988 / 741741 / Trans Lifeline / findahelpline / 911) on detection, then continue to a normal empathetic reply — in both the fast path and the event-bus `SafetyEventHandler`.
+  - ☑ Added `CrisisAlertHandler` subscribed to `EVENT_CRISIS_DETECTED` (structured real-time WARNING escalation hook), registered in wiring.
+  - ☑ Added `tests/test_safety_crisis_path.py` — drives the filter + service incl. `downbad` scope; 6 tests pass.
 - ☐ **Deletion sweep:** legacy inline HTML, `app/admin/api.py`, dead `/character` block, `NullConversationRepository`, stub broadcast/console buttons, empty `optimize_shards`, stray `nul`.
 - ☐ **Security batch:** default bind `127.0.0.1`; parameterize/remove `db_edit` where-clause; fix `.dockerignore`; untrack `.claude/settings.local.json`.
 - ☐ **CI/env repair:** fix stale onboarding assertion; correct README Redis/bcrypt claims; fix pre-commit stale refs; add ruff+mypy to CI.
@@ -92,4 +93,4 @@ Solid, coherent ops panel (B/B+): consistent dark design system, strong informat
 
 ## Change log
 
-_(appended as commits land)_
+- **Crisis path fix** — `SafetyFilter` split into a rate-limit-only gate + `SafetyDecision`; `SafetyService.inspect_message` now runs in every scope, returns a flag, and uses severity 5 (was 7, silently rejected by the CHECK constraint); crisis-resource message sent on the fast path and via `SafetyEventHandler`; `CrisisAlertHandler` subscribes to the previously-dead `EVENT_CRISIS_DETECTED`; new `tests/test_safety_crisis_path.py` (6 passing). Files: `app/domain/safety/{filter,service,handler,resources}.py`, `app/interfaces/telegram/adapter.py`, `app/runtime/wiring.py`.
