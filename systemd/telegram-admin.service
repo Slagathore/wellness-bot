@@ -7,7 +7,10 @@ Type=simple
 User=telegram-bot
 WorkingDirectory=/opt/telegram_wellness_bot
 Environment="PATH=/opt/telegram_wellness_bot/venv/bin"
-ExecStart=/opt/telegram_wellness_bot/venv/bin/python -m app.interfaces.admin.server --host 0.0.0.0 --port 8100
+# Bind to loopback only. The admin panel uses plaintext HTTP Basic auth and
+# exposes high-risk tools -- expose it via a TLS reverse proxy (nginx), not by
+# binding 0.0.0.0 directly.
+ExecStart=/opt/telegram_wellness_bot/venv/bin/python -m app.interfaces.admin.server --host 127.0.0.1 --port 8110
 Restart=always
 RestartSec=10
 

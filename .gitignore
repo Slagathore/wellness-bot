@@ -4,6 +4,10 @@
 .env.*.local
 *.hash
 
+# Local Claude Code config — machine-specific paths and permission grants
+.claude/settings.local.json
+.claude/*.local.json
+
 # Python
 __pycache__/
 *.py[cod]

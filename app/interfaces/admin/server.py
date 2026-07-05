@@ -2054,6 +2054,36 @@ class DbEditRequest(BaseModel):
     dry_run: bool = True
 
 
+_PK_EQ_RE = re.compile(r"^(?P<col>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<val>\d+)$")
+_PK_IN_RE = re.compile(
+    r"^(?P<col>[A-Za-z_][A-Za-z0-9_]*)\s+IN\s*\(\s*(?P<vals>\d+(?:\s*,\s*\d+)*)\s*\)$",
+    re.IGNORECASE,
+)
+
+
+def _parse_pk_where(pk: str, where: str) -> Tuple[str, List[int]]:
+    """Restrict db_edit's WHERE to ``<pk> = <int>`` or ``<pk> IN (<int>, ...)``.
+
+    Values are parameterized and only the table's primary-key column is allowed.
+    This replaces raw string interpolation of an admin-supplied WHERE (a SQL
+    injection vector that the old ``";" not in where`` check did nothing to stop)
+    while preserving edit-by-id, the only legitimate use of this endpoint.
+    """
+    clause = (where or "").strip()
+    match = _PK_EQ_RE.match(clause)
+    if match and match.group("col") == pk:
+        return f"{pk} = ?", [int(match.group("val"))]
+    match = _PK_IN_RE.match(clause)
+    if match and match.group("col") == pk:
+        ids = [int(v) for v in re.split(r"\s*,\s*", match.group("vals"))]
+        placeholders = ", ".join("?" for _ in ids)
+        return f"{pk} IN ({placeholders})", ids
+    raise HTTPException(
+        status_code=400,
+        detail=f"where must be '{pk} = <id>' or '{pk} IN (<id>, ...)'",
+    )
+
+
 @app.post("/highrisk/db_edit", response_class=JSONResponse)
 async def highrisk_db_edit(
     payload: DbEditRequest, admin: str = Depends(_require_admin)
@@ -2086,20 +2116,21 @@ async def highrisk_db_edit(
         raise HTTPException(
             status_code=400, detail=f"Columns not allowed: {', '.join(invalid)}"
         )
-    # basic where safety
-    if not payload.where or ";" in payload.where:
-        raise HTTPException(status_code=400, detail="Invalid where clause")
+    # Parameterize the WHERE to a strict `<pk> = <id>` / `<pk> IN (...)` form.
+    where_sql, where_params = _parse_pk_where(pk, payload.where)
+    set_sql = ", ".join(f"{k}=?" for k in payload.set.keys())
     preview = {
         "table": payload.table,
         "where": payload.where,
         "set": payload.set,
-        "sql_preview": f"UPDATE {payload.table} SET {', '.join(f'{k}=?' for k in payload.set.keys())} WHERE {payload.where}",
+        "sql_preview": f"UPDATE {payload.table} SET {set_sql} WHERE {where_sql}",
     }
     if not payload.confirm:
         return {"status": "confirm_required", **preview}
     with db_rw() as conn:
         cur = conn.execute(
-            f"SELECT COUNT(*) FROM {payload.table} WHERE {payload.where}"
+            f"SELECT COUNT(*) FROM {payload.table} WHERE {where_sql}",
+            where_params,
         )
         to_update = cur.fetchone()[0]
         if payload.dry_run:
@@ -2111,9 +2142,9 @@ async def highrisk_db_edit(
             return {"status": "accepted", "dry_run": True, "rows": to_update, **preview}
         if to_update == 0:
             return {"status": "accepted", "updated": 0, **preview}
-        params = list(payload.set.values())
+        params = list(payload.set.values()) + where_params
         conn.execute(
-            f"UPDATE {payload.table} SET {', '.join(f'{k}=?' for k in payload.set.keys())} WHERE {payload.where}",
+            f"UPDATE {payload.table} SET {set_sql} WHERE {where_sql}",
             params,
         )
     _audit(
@@ -3583,9 +3614,16 @@ async def landing_page(
     return HTMLResponse(content=html)
 
 
-def run(host: str = "0.0.0.0", port: int = 8110) -> None:
+def run(host: str = "127.0.0.1", port: int = 8110) -> None:
     import uvicorn
 
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        logger.warning(
+            "Admin server binding to %s (non-loopback). The panel uses plaintext "
+            "HTTP Basic auth and exposes high-risk tools; only do this behind a "
+            "TLS reverse proxy on a trusted network.",
+            host,
+        )
     logger.info("Starting admin server on %s:%s", host, port)
     uvicorn.run(app, host=host, port=port)
 
@@ -3599,8 +3637,8 @@ if __name__ == "__main__":  # pragma: no cover
     )
     parser.add_argument(
         "--host",
-        default=os.environ.get("ADMIN_HOST", "0.0.0.0"),
-        help="bind host (default: 0.0.0.0)",
+        default=os.environ.get("ADMIN_HOST", "127.0.0.1"),
+        help="bind host (default: 127.0.0.1 loopback; override only behind TLS)",
     )
     parser.add_argument(
         "--port",
