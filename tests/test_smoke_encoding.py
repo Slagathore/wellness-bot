@@ -45,7 +45,6 @@ import importlib
 import io
 import json
 import os
-import sqlite3
 import sys
 from pathlib import Path
 from typing import List, Tuple
@@ -275,7 +274,7 @@ def test_print_survives_unicode() -> None:
     try:
         sys.stdout = buf
         # Replicate the exact format string that crashed in nightly.py
-        print(f"[nightly] [PSYCH] User 123456 Profile: Depression:0.32 Anxiety:0.18 IQ:~112")
+        print("[nightly] [PSYCH] User 123456 Profile: Depression:0.32 Anxiety:0.18 IQ:~112")
         # Now blast through every emoji we use anywhere in the codebase
         for ch in EMOJI_CORPUS:
             print(f"[test] emoji: {ch}")

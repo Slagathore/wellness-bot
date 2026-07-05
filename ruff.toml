@@ -1,0 +1,11 @@
+target-version = "py311"
+line-length = 100
+
+# Keep the default rule set (E/F/W). E501 (line length) is left to black.
+[lint]
+ignore = ["E501"]
+
+[lint.per-file-ignores]
+# Discord support imports are deliberately deferred behind an optional-dependency
+# guard, so module-level imports intentionally follow runtime code.
+"app/features/discord/bootstrap.py" = ["E402"]

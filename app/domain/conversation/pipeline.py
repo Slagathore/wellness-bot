@@ -24,8 +24,7 @@ from app.orchestrator.persona_runtime import (build_user_persona_runtime,
                                               filter_prompt_memories_for_personality,
                                               get_user_personality_name,
                                               resolve_user_model)
-from app.orchestrator.prompt_builder import (RESPONSE_COMPLETION_SENTINEL,
-                                             build_prompt_with_system_prompt)
+from app.orchestrator.prompt_builder import (build_prompt_with_system_prompt)
 from app.personality.modes import is_custom_character
 from app.rag.service import format_citations, get_retriever
 from app.utils.fs import pending_server_events_for_session

@@ -13,8 +13,7 @@ drain cloud quota through infinite retry loops or defaulting to CHAT_MODEL.
 
 from __future__ import annotations
 
-import types
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
@@ -262,7 +261,7 @@ class TestHandleDueFallback:
             "metadata": {"frequency": "daily", "specific_hour": 9},
         }
         # Patch event_bus.publish to avoid side effects
-        with patch("app.domain.reminders.dispatcher.event_bus") as mock_bus:
+        with patch("app.domain.reminders.dispatcher.event_bus"):
             dispatcher.handle_due(payload)
 
         # mark_sent_and_schedule_next MUST have been called
@@ -388,7 +387,7 @@ class TestWorkerModelRouting:
             mock_settings.worker_model = "huihui_ai/gemma3n-abliterated:e2b-fp16"
             mock_gs.return_value = mock_settings
 
-            result = dispatcher._generate_message(
+            dispatcher._generate_message(
                 "Drink water", {"time_of_day": "morning"}
             )
 

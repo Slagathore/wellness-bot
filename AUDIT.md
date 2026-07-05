@@ -79,8 +79,13 @@ Solid, coherent ops panel (B/B+): consistent dark design system, strong informat
 - ☑ **Deletion sweep** (commit `pending`): removed the ~2,125-line legacy inline-HTML fallback in `server.py` (now serves `admin.html` unconditionally, 500s if missing) — this also removed the `(admin) stub broadcast`/`stub prompt` buttons and the "old stub tools" panel, which lived inside it; deleted `app/admin/` (dead `api.py` with the password-bypass bug + empty `__init__`); removed the unreachable `/character` pagination block (all 3 ruff F821s); deleted `NullConversationRepository`; removed the empty `optimize_shards()` no-op and its nightly call; deleted the stray `nul` file. `server.py`: 5,737 → 3,612 lines.
 - ☑ **Security batch** (commit `pending`): admin server now defaults to `127.0.0.1` (`run()`, CLI `--host`, and `systemd/telegram-admin.service`), with a WARNING when bound non-loopback; `/highrisk/db_edit` WHERE is now parsed to a strict parameterized `<pk> = <id>` / `<pk> IN (...)` form (`_parse_pk_where`, + tests) instead of raw string interpolation; `.dockerignore` rewritten to exclude `.env`/`.env.*`/`*.hash`/`*.key`/`.snapshots`/`.kilo`/`.claude`/`perchance*.json`/`nul`; `.claude/settings.local.json` untracked (`git rm --cached`) and added to `.gitignore`.
   - Not done here (larger, deferred): hashing the admin web password, adding CSRF tokens, converting `/models/pull/stream` to POST, and restricting the LLM-console SQL/file tools — tracked in the deferred list below.
-- ☐ **CI/env repair:** fix stale onboarding assertion; correct README Redis/bcrypt claims; fix pre-commit stale refs; add ruff+mypy to CI.
-- ☐ **Verify:** run test suite + ruff; final commit + push.
+- ☑ **CI/docs repair** (commit `pending`):
+  - Fixed `test_onboarding_flow_progression` — the flow gained a `sleep_schedule` step between `timezone` and `support_preferences`; the test now exercises it. Passes.
+  - README: replaced the fictional "Redis Event Bus" (diagram + prerequisite + `REDIS_URL` note) with the real in-process `asyncio` bus, and corrected the false "bcrypt-hashed" admin-password claim (web panel uses plaintext HTTP Basic; the SHA-256 `AdminAuth` guards only the desktop panel).
+  - `.pre-commit-config.yaml`: dropped the nonexistent `unified_bot`/`handlers` path globs and the broken `python test_feature_flags.py` local hook (file doesn't exist); bumped ruff to v0.6.9.
+  - Added a `ruff.toml` and made `app/` + `tests/` ruff-clean (0 errors, down from 22 — auto-fixed 11 unused-import/empty-f-string, hand-fixed the ambiguous name + 3 unused vars, ignored the intentional E402 in the Discord bootstrap).
+  - CI (`ci.yml`): added a `lint` job running ruff (blocking) and mypy (informational).
+- ◐ **Verify:** targeted suites pass (safety, db_edit, onboarding, reminders, cloud-drain = 44 + 6 + 11); full-suite run pending in the verify step.
 
 ### Deferred (larger, tracked but not in this pass)
 
@@ -94,6 +99,7 @@ Solid, coherent ops panel (B/B+): consistent dark design system, strong informat
 
 ## Change log
 
+- **CI/docs repair** — fixed the stale onboarding test (new `sleep_schedule` step); corrected README's Redis-bus and bcrypt claims; fixed stale/broken pre-commit config; made `app/`+`tests/` ruff-clean (22 → 0) with a new `ruff.toml`; added a CI `lint` job (ruff blocking, mypy informational).
 - **Security batch** — admin bind defaults to loopback (`run()`/CLI/systemd); `db_edit` WHERE parameterized to a strict PK form (`_parse_pk_where` + tests); `.dockerignore` now excludes `.env`/secrets/PII/bulky exports; `.claude/settings.local.json` untracked + ignored.
 - **Deletion sweep** — removed ~2,300 lines of dead code: legacy inline-HTML admin fallback (+ its stub broadcast/console buttons), `app/admin/api.py` (+ package), unreachable `/character` block (fixes 3 F821s), `NullConversationRepository`, empty `optimize_shards()`, stray `nul`. `server.py` 5,737 → 3,612.
 - **Crisis path fix** — `SafetyFilter` split into a rate-limit-only gate + `SafetyDecision`; `SafetyService.inspect_message` now runs in every scope, returns a flag, and uses severity 5 (was 7, silently rejected by the CHECK constraint); crisis-resource message sent on the fast path and via `SafetyEventHandler`; `CrisisAlertHandler` subscribes to the previously-dead `EVENT_CRISIS_DETECTED`; new `tests/test_safety_crisis_path.py` (6 passing). Files: `app/domain/safety/{filter,service,handler,resources}.py`, `app/interfaces/telegram/adapter.py`, `app/runtime/wiring.py`.

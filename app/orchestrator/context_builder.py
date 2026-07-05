@@ -9,7 +9,7 @@ import re
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, Sequence
+from typing import Any, Sequence
 
 from app.config import settings
 from app.db import db_ro, db_rw

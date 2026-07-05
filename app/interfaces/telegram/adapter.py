@@ -4288,7 +4288,7 @@ class TelegramAdapter:
         user_overrides = self._load_user_llm_settings(user_id)
 
         lines = [
-            f"⚙️ **Your LLM Settings**",
+            "⚙️ **Your LLM Settings**",
             f"Personality: **{personality_name}**",
             f"Model: **{current_model}**",
             "",
@@ -5106,7 +5106,7 @@ class TelegramAdapter:
                 "`--model <name>` - Choose model (default: flux2-klein)\n"
                 "`--steps <n>` — Inference steps\n"
                 "`--guidance <n>` — Guidance scale\n\n"
-                f"**Available models:**\n" + "\n".join(f"• {m}" for m in image_models) + "\n\n"
+                "**Available models:**\n" + "\n".join(f"• {m}" for m in image_models) + "\n\n"
                 "**Examples:**\n"
                 "• `/generate_image a cozy reading nook with warm lighting`\n"
                 "• `/generate_image cinematic rainy city skyline --model flux2-klein`\n\n"
@@ -5970,7 +5970,7 @@ class TelegramAdapter:
         if user_source is None:
             return
         assert context.user_data is not None
-        user_id = self._ensure_user(user_source)
+        self._ensure_user(user_source)  # ensure the user row exists (side effect)
         adv_id = context.user_data.get("active_adventure")
         if not adv_id:
             await query.edit_message_text("No active adventure.")

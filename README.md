@@ -45,7 +45,7 @@ A self-hosted, multi-platform AI wellness companion built on Telegram (and optio
        ▲
        │ async events
 ┌──────┴──────────────────────────────────────────────┐
-│                  Redis Event Bus                    │
+│           In-Process Event Bus (asyncio)            │
 │  Workers: sentiments · nightly · reminders ·       │
 │           personalization agent · scheduler         │
 └──────────────────────────────────────────────────────┘
@@ -74,8 +74,9 @@ A self-hosted, multi-platform AI wellness companion built on Telegram (and optio
 | --- | --- |
 | Python 3.11+ | Tested on 3.11 |
 | [Ollama](https://ollama.com) | Local LLM inference; pull a model before starting |
-| [Redis](https://redis.io) | Event bus; `redis-server` or Docker |
 | Telegram bot token | Create a bot via [@BotFather](https://t.me/BotFather) |
+
+> **Note:** the event bus is in-process (`asyncio`, see [`app/core/events.py`](app/core/events.py)); Redis is **not** required to run the bot. `redis` is pinned in `requirements.txt` and `REDIS_URL` exists as a reserved setting, but nothing in `app/` currently connects to Redis.
 
 **Minimal Ollama setup:**
 
@@ -113,7 +114,7 @@ python -m app.main_modular
 
 The bot is now polling Telegram. Open a chat with your bot and send `/start`.
 
-The admin web panel is available at `http://localhost:8000/admin` (port configurable via uvicorn args).
+The admin web panel is available at `http://localhost:8110/admin` (port configurable via uvicorn args).
 
 ---
 
@@ -132,7 +133,7 @@ All configuration is via environment variables loaded from `.env`. See [`.env.ex
 | `DATABASE_PATH` | Full path to the SQLite database file |
 | `CHAT_MODEL` | Ollama model for conversations (e.g. `llama3:latest`) |
 | `EMBED_MODEL` | Ollama embedding model (e.g. `nomic-embed-text`) |
-| `REDIS_URL` | Redis connection string |
+| `REDIS_URL` | Reserved; not currently used (the event bus is in-process). |
 
 **Feature flags** are controlled via the `APP_FEATURE_FLAGS` JSON variable. Set a key to `false` to disable a feature without removing code.
 
@@ -235,7 +236,7 @@ wellness-bot/
 - **Never commit `.env`** — it contains live credentials. It is gitignored by default.
 - The `wellness_data/` directory contains user PII (conversations, profiles). It is gitignored.
 - `ENABLE_DANGEROUS_TOOLS`, `ADMIN_DB_EDIT_ENABLED`, `ADMIN_LLM_CONSOLE_ENABLED`, and `ADMIN_OMNI_BROADCAST_ENABLED` default to `false`. Only enable them in controlled environments.
-- Admin passwords are bcrypt-hashed on first use. The hash file is in `wellness_data/` and is not committed.
+- **Admin web panel auth:** the FastAPI admin server (`app/interfaces/admin/server.py`) authenticates via HTTP Basic against `ADMIN_USERNAME`/`ADMIN_PASSWORD`, compared **in plaintext** — so keep `.env` secret, and run the panel on loopback (the default is now `127.0.0.1`) behind a TLS reverse proxy if it must be remote. The salted-hash `AdminAuth` in `app/utils/security.py` (SHA-256, not bcrypt) currently guards only the desktop Tk control panel, not the web panel.
 - See [`docs/secrets.md`](docs/secrets.md) for credential rotation procedures.
 
 ---

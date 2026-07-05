@@ -2435,7 +2435,7 @@ External file access: {payload.allow_external_files}
                 clean = response_text.strip()
                 if clean.startswith("```"):
                     lines = clean.split("\n")
-                    lines = [l for l in lines if not l.strip().startswith("```")]
+                    lines = [ln for ln in lines if not ln.strip().startswith("```")]
                     clean = "\n".join(lines).strip()
                 # Look for JSON object in response
                 if "{" in clean and "}" in clean:
