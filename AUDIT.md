@@ -1,0 +1,95 @@
+# Mira Wellness Bot — Audit & Remediation Log
+
+**Started:** 2026-07-05
+**Branch:** `fix/crisis-safety-and-cleanup`
+**Scope of audit:** full `app/` tree (~58k LOC), tests, CI, tooling, admin UI (ran live + screenshotted), git history and repo hygiene. Excludes `.venv`, caches, `.git`.
+
+This document is the running record of what the audit found and what is being changed. It is edited continuously as work lands. Status legend: ☐ todo · ◐ in progress · ☑ done.
+
+---
+
+## TL;DR verdict
+
+Ambitious, genuinely featureful product (~58k LOC) that is **mid-rewrite and never finished the migration** — legacy subsystems were left in place alongside their replacements, so the repo ships three parallel config/DB/RAG stacks, three god-files (~32% of `app/`), and a **broken crisis-handling path in a mental-health bot**. The modern parts (event bus, DI container, shadow-mode planner rollout, LLM param precedence) are well-designed. Git history is clean — no secret was ever committed.
+
+---
+
+## Clean bill of health (verified)
+
+- `.env` was **never** committed; no real secret exists in any of the 5 pushed commits (all matches are placeholders).
+- `wellness.db`, `wellness_data/`, the 17 MB `perchance-*.json`, `.snapshots/`, `.kilo/`, `nul` — all correctly untracked and covered by `.gitignore`.
+
+---
+
+## Findings by severity
+
+### P0 — Crisis handling (safety-critical for a wellness bot)
+
+1. **A user expressing suicidal ideation gets "Please slow down; I'm processing your recent messages."**
+   [app/domain/safety/filter.py](app/domain/safety/filter.py) `allow()` returns a single bool for two unrelated conditions — rate-limiting *and* crisis-keyword match — discarding which fired. The Telegram fast path ([app/interfaces/telegram/adapter.py:6522-6572](app/interfaces/telegram/adapter.py#L6522-L6572)) treats any `False` as a throttle: it sends the throttle text and `return`s **before** `safety_service.inspect_message()` at line 6570 can run. Because `inspect_message` uses the identical keyword list, it only ever sees text the gate already proved is *not* crisis — so real-time keyword crises are never logged to the admin "Crisis Alerts" dashboard. Same bug duplicated in the event-bus path [app/domain/conversation/handler.py:56-93](app/domain/conversation/handler.py#L56-L93).
+2. **Crisis detection is disabled entirely in `roleplay` and `downbad` modes** — the exact modes where a vulnerable user is most exposed. [app/history_scope.py:122-125](app/history_scope.py#L122-L125) `automated_moderation_allowed_for_scope()` returns `True` only for `standard`; both the real-time filter and the batch worker skip crisis detection otherwise.
+3. **`EVENT_CRISIS_DETECTED` has zero subscribers** — even when it fires, the only effect is one DB row awaiting manual review. No real-time escalation.
+4. **Crisis resources (988, Crisis Text Line, Trans Lifeline) exist only as a RAG document** — delivery depends on vector similarity surfacing that doc, not a guaranteed path.
+5. `tests/test_e2e_crisis.py` hand-inserts DB rows instead of exercising the filter/handler, so none of the above was ever caught.
+
+### P1 — Security (admin panel)
+
+6. **LLM Console ≈ RCE + total data loss behind one plaintext password.** `query_database`/`update_database` let the model run arbitrary SQL (`DELETE FROM users` passes the guard); `edit_file` writes any file under the project root. [app/interfaces/admin/llm_console_tools.py:330-420](app/interfaces/admin/llm_console_tools.py#L330-L420)
+7. **`/highrisk/db_edit` `where` clause is string-interpolated SQL** — only defense is rejecting `;`, which classic injection doesn't need. [app/interfaces/admin/server.py:2102](app/interfaces/admin/server.py#L2102)
+8. **Admin server binds `0.0.0.0` by default**, plain HTTP, Basic auth against the **plaintext** `.env` password (README's "bcrypt-hashed" claim is false for the web GUI). [app/interfaces/admin/server.py](app/interfaces/admin/server.py) + `systemd/telegram-admin.service`
+9. **No CSRF protection**; `/models/pull/stream` is a state-changing GET that spawns a subprocess.
+10. **[app/admin/api.py](app/admin/api.py) never checks the password** — any password authenticates. Dead/orphaned code, but a live landmine in a public repo.
+11. **`.dockerignore` does not exclude `.env`** — `COPY . .` in the Dockerfile bakes real tokens into image layers.
+12. **`.claude/settings.local.json` is tracked and pushed** to the public repo (leaks local absolute paths + tooling, not credentials).
+13. A "Legacy" admin button sends the literal string `(admin) stub broadcast` to all real Telegram + Discord users if clicked through its confirms. [app/interfaces/admin/server.py:5199-5204](app/interfaces/admin/server.py#L5199-L5204)
+
+### P1 — Dead / stubbed / misleading
+
+14. **Docs lie about architecture:** README advertises a "Redis Event Bus" as a first-class component and hard prerequisite; Redis is never imported anywhere. Real bus is an in-process `asyncio.Queue`.
+15. **~4,500+ lines of deletable dead weight:** legacy inline-HTML admin UI [server.py:3582-5708](app/interfaces/admin/server.py#L3582-L5708) (~2,100 lines, only renders if `admin.html` is deleted); `app/admin/api.py`; `NullConversationRepository` (zero references); unreachable `/character` block referencing undefined `characters` (all 3 ruff F821s) [adapter.py:2311-2344](app/interfaces/telegram/adapter.py#L2311-L2344); empty `optimize_shards()` the nightly job calls forever [nightly.py:150-152](app/workers/nightly.py#L150-L152).
+16. **Venv doesn't match `requirements.txt`:** `ollama`/`numpy` pinned but not installed → 9 test modules fail collection and the live RAG backend errors ("numpy is required for NumpyVectorBackend").
+17. **Tests: 812 pass, 18 fail, 9 collection errors.** `test_onboarding_flow_progression` asserts copy the flow no longer produces — an environment-independent failure, so **CI is likely red**. CI runs no lint/mypy. Pre-commit config references directories (`unified_bot/`, `handlers/`) and a file that no longer exist. ~50 deps all `>=`, no lockfile.
+
+### P2 — Architecture (maintainability tax, not live defects)
+
+18. Sync/async twin pipelines ~90% identical (`generate_response_async` vs `_generate_response_sync`, ~400 lines each).
+19. Three DB layers incl. raw unpooled `sqlite3.connect()` on **every chat turn** in [app/personality/manager.py](app/personality/manager.py) — a real `SQLITE_BUSY` risk.
+20. Two non-interoperating RAG stacks (real `sqlite-vec` vs. a hand-rolled pure-Python cosine loop against a second hardcoded-path DB).
+21. **Discord runs the legacy 165-line pipeline** — silently lacks turn planning, continuation, live search.
+22. Three god-files: `adapter.py` (6,749), `control_panel.py` (6,124), `server.py` (5,737).
+23. 343 broad `except Exception`, ~30 swallow with `pass` (incl. persona resolution → silent degrade to "friendly").
+
+### UI (ran live, screenshotted all tabs)
+
+Solid, coherent ops panel (B/B+): consistent dark design system, strong information architecture (11 tabs), standout Media tab. Weaknesses: poor vertical-space discipline (cards stack full-width leaving dead space), weak empty/zero states, danger-red diluted by using it for primary CTAs too, live-feed SSE disconnects immediately (`ERR_INCOMPLETE_CHUNKED_ENCODING`), Chart.js loads from a CDN (breaks the "no cloud deps" pitch + offline), 5,111-line single `admin.js`, and **three UIs total** (this one + the dead inline fallback + the Tkinter panel).
+
+---
+
+## Remediation plan (this branch)
+
+### Immediate — in progress
+
+- ◐ **Crisis path fix**
+  - ☐ Split `SafetyFilter` into a rate-limit-only gate; return a structured decision.
+  - ☐ Make `SafetyService.inspect_message` run in **all** scopes and return whether a crisis was flagged.
+  - ☐ Send a real crisis-resource message (988 / 741741 / Trans Lifeline / 911) on detection, then continue to a normal empathetic reply — in both the fast path and the event-bus path.
+  - ☐ Add a subscriber to `EVENT_CRISIS_DETECTED` that logs a structured real-time WARNING (escalation hook).
+  - ☐ Add a real test that drives the filter + service (incl. `downbad`/`roleplay` scope) instead of hand-inserting rows.
+- ☐ **Deletion sweep:** legacy inline HTML, `app/admin/api.py`, dead `/character` block, `NullConversationRepository`, stub broadcast/console buttons, empty `optimize_shards`, stray `nul`.
+- ☐ **Security batch:** default bind `127.0.0.1`; parameterize/remove `db_edit` where-clause; fix `.dockerignore`; untrack `.claude/settings.local.json`.
+- ☐ **CI/env repair:** fix stale onboarding assertion; correct README Redis/bcrypt claims; fix pre-commit stale refs; add ruff+mypy to CI.
+- ☐ **Verify:** run test suite + ruff; final commit + push.
+
+### Deferred (larger, tracked but not in this pass)
+
+- Unify sync/async pipelines into one async impl + sync wrapper.
+- Point Discord at the modern pipeline.
+- Collapse to one DB layer and one RAG stack.
+- UI polish: card grids, empty states, destructive-vs-primary styling, vendor Chart.js, fix SSE reconnect.
+- Decompose `adapter.py` and decide the Tkinter panel's fate.
+
+---
+
+## Change log
+
+_(appended as commits land)_
