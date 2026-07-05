@@ -85,7 +85,11 @@ Solid, coherent ops panel (B/B+): consistent dark design system, strong informat
   - `.pre-commit-config.yaml`: dropped the nonexistent `unified_bot`/`handlers` path globs and the broken `python test_feature_flags.py` local hook (file doesn't exist); bumped ruff to v0.6.9.
   - Added a `ruff.toml` and made `app/` + `tests/` ruff-clean (0 errors, down from 22 — auto-fixed 11 unused-import/empty-f-string, hand-fixed the ambiguous name + 3 unused vars, ignored the intentional E402 in the Discord bootstrap).
   - CI (`ci.yml`): added a `lint` job running ruff (blocking) and mypy (informational).
-- ◐ **Verify:** targeted suites pass (safety, db_edit, onboarding, reminders, cloud-drain = 44 + 6 + 11); full-suite run pending in the verify step.
+- ☑ **Verify:**
+  - Installed `numpy` + `ollama` into the local venv (they were pinned in `requirements.txt` but missing), pinning `httpx==0.25.2` to satisfy `python-telegram-bot`. This cleared all 9 collection errors and the RAG backend error.
+  - **Full suite: 861 passed, 0 failed, 0 collection errors** (baseline was 812 passed / 18 failed / 9 collection errors). Two failures surfaced by my changes and fixed: the admin gating test used `where: "1=1"` (now rejected by the hardened parser → switched to `id = 1`), and the smoke test's torch-optional module was added to the import-skip allowlist.
+  - `ruff check app/ tests/` — clean.
+  - Launched the admin server on `127.0.0.1` and confirmed `GET /` returns 200 and serves `admin.html` (tab nav present) after the 2,125-line deletion.
 
 ### Deferred (larger, tracked but not in this pass)
 
@@ -99,6 +103,7 @@ Solid, coherent ops panel (B/B+): consistent dark design system, strong informat
 
 ## Change log
 
+- **Verify** — installed numpy+ollama (httpx pinned to 0.25.2); full suite now **861 passed / 0 failed / 0 collection errors** (was 812/18/9); fixed the admin gating test (`1=1` → `id = 1`) and skipped the torch-only smoke import; admin UI confirmed serving on loopback.
 - **CI/docs repair** — fixed the stale onboarding test (new `sleep_schedule` step); corrected README's Redis-bus and bcrypt claims; fixed stale/broken pre-commit config; made `app/`+`tests/` ruff-clean (22 → 0) with a new `ruff.toml`; added a CI `lint` job (ruff blocking, mypy informational).
 - **Security batch** — admin bind defaults to loopback (`run()`/CLI/systemd); `db_edit` WHERE parameterized to a strict PK form (`_parse_pk_where` + tests); `.dockerignore` now excludes `.env`/secrets/PII/bulky exports; `.claude/settings.local.json` untracked + ignored.
 - **Deletion sweep** — removed ~2,300 lines of dead code: legacy inline-HTML admin fallback (+ its stub broadcast/console buttons), `app/admin/api.py` (+ package), unreachable `/character` block (fixes 3 F821s), `NullConversationRepository`, empty `optimize_shards()`, stray `nul`. `server.py` 5,737 → 3,612.

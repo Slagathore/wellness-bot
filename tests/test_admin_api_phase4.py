@@ -88,10 +88,12 @@ def test_highrisk_endpoints_are_gated():
         "/highrisk/llm_console", auth=(user, "admin-test"), json={"prompt": "hi"}
     )
     assert resp.status_code in (200, 403)
+    # Use a valid primary-key WHERE; db_edit now rejects arbitrary WHERE clauses
+    # (e.g. "1=1") with 400 regardless of gating. This still exercises the gate.
     resp = client.post(
         "/highrisk/db_edit",
         auth=(user, "admin-test"),
-        json={"table": "users", "where": "1=1", "set": {}, "confirm": False},
+        json={"table": "users", "where": "id = 1", "set": {}, "confirm": False},
     )
     assert resp.status_code in (200, 403)
     resp = client.post(

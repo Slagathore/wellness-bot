@@ -125,6 +125,7 @@ _IMPORT_SKIP_PREFIXES = (
     "app.features.adaptive_psych_tests.bootstrap",  # wires telegram handlers
     "app.features.feedback.bootstrap",  # wires telegram handlers
     "app.interfaces.admin.server",  # FastAPI app needs full env
+    "app.services.flux2_klein_server",  # unguarded top-level `import torch` (optional GPU dep)
 )
 
 
