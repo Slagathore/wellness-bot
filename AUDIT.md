@@ -68,7 +68,7 @@ Solid, coherent ops panel (B/B+): consistent dark design system, strong informat
 
 ## Remediation plan (this branch)
 
-### Immediate — in progress
+### Immediate — done (branch `fix/crisis-safety-and-cleanup`, 6 commits)
 
 - ☑ **Crisis path fix** (commit `dae…`)
   - ☑ Split `SafetyFilter` into a rate-limit-only gate returning a structured `SafetyDecision`; a crisis never blocks the message.
