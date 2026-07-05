@@ -98,7 +98,6 @@ def nightly_pipeline() -> None:
     try:
         backup_database()
         backup_user_filesystems()
-        optimize_shards()
         reprocess_sentiments()
         generate_missing_embeddings()
         refresh_wellness_resources()
@@ -145,11 +144,6 @@ def backup_user_filesystems() -> None:
     archive_base = backup_dir / "users_snapshot"
     shutil.make_archive(str(archive_base), "gztar", users_dir)
     print(f"[nightly] User filesystem snapshot saved to {archive_base}.tar.gz")
-
-
-def optimize_shards() -> None:
-    # Placeholder for shard maintenance; currently append-only.
-    pass
 
 
 def reprocess_sentiments(limit: int = 100) -> None:

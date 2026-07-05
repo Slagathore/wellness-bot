@@ -76,7 +76,7 @@ Solid, coherent ops panel (B/B+): consistent dark design system, strong informat
   - ☑ Send the real crisis-resource message (988 / 741741 / Trans Lifeline / findahelpline / 911) on detection, then continue to a normal empathetic reply — in both the fast path and the event-bus `SafetyEventHandler`.
   - ☑ Added `CrisisAlertHandler` subscribed to `EVENT_CRISIS_DETECTED` (structured real-time WARNING escalation hook), registered in wiring.
   - ☑ Added `tests/test_safety_crisis_path.py` — drives the filter + service incl. `downbad` scope; 6 tests pass.
-- ☐ **Deletion sweep:** legacy inline HTML, `app/admin/api.py`, dead `/character` block, `NullConversationRepository`, stub broadcast/console buttons, empty `optimize_shards`, stray `nul`.
+- ☑ **Deletion sweep** (commit `pending`): removed the ~2,125-line legacy inline-HTML fallback in `server.py` (now serves `admin.html` unconditionally, 500s if missing) — this also removed the `(admin) stub broadcast`/`stub prompt` buttons and the "old stub tools" panel, which lived inside it; deleted `app/admin/` (dead `api.py` with the password-bypass bug + empty `__init__`); removed the unreachable `/character` pagination block (all 3 ruff F821s); deleted `NullConversationRepository`; removed the empty `optimize_shards()` no-op and its nightly call; deleted the stray `nul` file. `server.py`: 5,737 → 3,612 lines.
 - ☐ **Security batch:** default bind `127.0.0.1`; parameterize/remove `db_edit` where-clause; fix `.dockerignore`; untrack `.claude/settings.local.json`.
 - ☐ **CI/env repair:** fix stale onboarding assertion; correct README Redis/bcrypt claims; fix pre-commit stale refs; add ruff+mypy to CI.
 - ☐ **Verify:** run test suite + ruff; final commit + push.
@@ -93,4 +93,5 @@ Solid, coherent ops panel (B/B+): consistent dark design system, strong informat
 
 ## Change log
 
+- **Deletion sweep** — removed ~2,300 lines of dead code: legacy inline-HTML admin fallback (+ its stub broadcast/console buttons), `app/admin/api.py` (+ package), unreachable `/character` block (fixes 3 F821s), `NullConversationRepository`, empty `optimize_shards()`, stray `nul`. `server.py` 5,737 → 3,612.
 - **Crisis path fix** — `SafetyFilter` split into a rate-limit-only gate + `SafetyDecision`; `SafetyService.inspect_message` now runs in every scope, returns a flag, and uses severity 5 (was 7, silently rejected by the CHECK constraint); crisis-resource message sent on the fast path and via `SafetyEventHandler`; `CrisisAlertHandler` subscribes to the previously-dead `EVENT_CRISIS_DETECTED`; new `tests/test_safety_crisis_path.py` (6 passing). Files: `app/domain/safety/{filter,service,handler,resources}.py`, `app/interfaces/telegram/adapter.py`, `app/runtime/wiring.py`.

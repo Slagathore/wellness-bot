@@ -2310,39 +2310,6 @@ class TelegramAdapter:
             page=page,
         )
         return
-        page_size = 8
-        total_pages = (len(characters) + page_size - 1) // page_size
-        start = page * page_size
-        page_chars = characters[start : start + page_size]
-
-        buttons = []
-        for ch in page_chars:
-            label = f"{ch['emoji']} {ch['display_name']}"
-            if current == f"custom:{ch['id']}":
-                label += " (active)"
-            buttons.append(
-                [InlineKeyboardButton(label, callback_data=f"charswitch:{ch['id']}")]
-            )
-
-        # Navigation buttons
-        nav = []
-        if page > 0:
-            nav.append(InlineKeyboardButton("⬅ Prev", callback_data=f"charpage:{page - 1}"))
-        if page < total_pages - 1:
-            nav.append(InlineKeyboardButton("Next ➡", callback_data=f"charpage:{page + 1}"))
-        if nav:
-            buttons.append(nav)
-
-        # Back to built-in button
-        buttons.append(
-            [InlineKeyboardButton("🔄 Back to built-in personalities", callback_data="charswitch:builtin")]
-        )
-
-        await update.message.reply_text(
-            f"🎭 **Custom Characters** (page {page + 1}/{total_pages})\n\n"
-            f"You have {len(characters)} character(s). Tap to switch:",
-            reply_markup=InlineKeyboardMarkup(buttons),
-        )
 
     async def _character_creation_step(
         self,
