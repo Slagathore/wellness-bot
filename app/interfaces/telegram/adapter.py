@@ -1607,9 +1607,14 @@ class TelegramAdapter:
 
         with db_rw() as conn:
             for msg in session_messages[-20:]:
+                # messages.role is 'user'/'assistant', but adventure_messages'
+                # CHECK only allows user/character/narrator/system. Map
+                # assistant -> narrator, or the whole seed insert throws an
+                # IntegrityError and the converted chat loses all its context.
+                adv_role = "narrator" if msg["role"] == "assistant" else "user"
                 conn.execute(
                     "INSERT INTO adventure_messages (adventure_id, role, content) VALUES (?, ?, ?)",
-                    (adv_id, msg["role"], msg["content"]),
+                    (adv_id, adv_role, msg["content"]),
                 )
 
         if char_cfg and is_custom_character(current_personality):
@@ -1667,18 +1672,26 @@ class TelegramAdapter:
         else:
             await target_message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
 
+    _ADVENTURE_PAGE_SIZE = 10
+
     async def _show_adventure_list(
         self,
         *,
         target_message,
         user_id: int,
         edit: bool = False,
+        offset: int = 0,
     ) -> None:
+        page_size = self._ADVENTURE_PAGE_SIZE
+        offset = max(0, int(offset))
         with db_ro() as conn:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM adventures WHERE user_id = ?", (user_id,)
+            ).fetchone()[0]
             rows = conn.execute(
                 "SELECT id, title, status FROM adventures "
-                "WHERE user_id = ? ORDER BY updated_at DESC LIMIT 20",
-                (user_id,),
+                "WHERE user_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+                (user_id, page_size, offset),
             ).fetchall()
         if not rows:
             text = "You have no adventures yet. Create one or convert your current chat into a story."
@@ -1694,12 +1707,26 @@ class TelegramAdapter:
                 f"#{row['id']} [{row['status']}] {row['title']}"
                 for row in rows
             ]
+            # A button for EVERY row on this page (not just the first 10) so all
+            # listed adventures are actually playable.
             buttons = [
                 [InlineKeyboardButton(f"#{row['id']} {row['title'][:28]}", callback_data=f"adv_resume:{row['id']}")]
-                for row in rows[:10]
+                for row in rows
             ]
+            nav: list = []
+            if offset > 0:
+                nav.append(InlineKeyboardButton("⬅ Newer", callback_data=f"advhub:list:{max(0, offset - page_size)}"))
+            if offset + page_size < total:
+                nav.append(InlineKeyboardButton("Older ➡", callback_data=f"advhub:list:{offset + page_size}"))
+            if nav:
+                buttons.append(nav)
             buttons.append([InlineKeyboardButton("Adventure Hub", callback_data="advhub:menu")])
-            text = "?? **Your Adventures**\n\n" + "\n".join(lines)
+            shown_lo = offset + 1
+            shown_hi = offset + len(rows)
+            text = (
+                f"🎭 **Your Adventures** ({shown_lo}–{shown_hi} of {total})\n\n"
+                + "\n".join(lines)
+            )
             reply_markup = InlineKeyboardMarkup(buttons)
         if edit:
             await target_message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
@@ -3144,6 +3171,23 @@ class TelegramAdapter:
     # Adventure message handling (play mode)
     # =========================================================================
 
+    _PLACEHOLDER_TITLE_RE = re.compile(
+        r"^(adventure\s*#?\s*\d*$|adventure with\b|untitled\b|converted adventure$|new adventure$|quick adventure$)",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _is_placeholder_adventure_title(cls, title: str | None) -> bool:
+        """True for auto-generated/generic titles that auto-titling may replace.
+
+        A user-chosen title (e.g. from `/adventure new <title>`) is not a
+        placeholder, so auto-titling never overrides it.
+        """
+        text = (title or "").strip()
+        if not text:
+            return True
+        return bool(cls._PLACEHOLDER_TITLE_RE.match(text))
+
     async def _auto_title_adventure(
         self, adventure_id: int, user_id: int,
     ) -> None:
@@ -3466,9 +3510,17 @@ class TelegramAdapter:
                 "SELECT COUNT(*) FROM adventure_messages WHERE adventure_id = ?",
                 (adventure_id,),
             ).fetchone()[0]
+            title_row = conn.execute(
+                "SELECT title FROM adventures WHERE id = ?", (adventure_id,)
+            ).fetchone()
 
-        # Auto-title: trigger at the 6th message (3 full exchanges), only once
-        if total_msgs == 6:
+        # Auto-title once the story has a few exchanges, but only while the title
+        # is still a generic placeholder. Using >= (not ==) plus the placeholder
+        # guard means variable per-turn row counts (OOC turns insert extra rows)
+        # and pre-seeded fromchat backlogs can't skip it, and it never re-runs or
+        # overrides a user-chosen title.
+        current_title = title_row["title"] if title_row else ""
+        if total_msgs >= 6 and self._is_placeholder_adventure_title(current_title):
             asyncio.create_task(self._auto_title_adventure(adventure_id, user_id))
 
         self._schedule_adventure_lore_refresh(
@@ -5861,11 +5913,18 @@ class TelegramAdapter:
             )
             return
 
-        if action == "list":
+        if action == "list" or action.startswith("list:"):
+            offset = 0
+            if action.startswith("list:"):
+                try:
+                    offset = int(action.split(":", 1)[1])
+                except (ValueError, IndexError):
+                    offset = 0
             await self._show_adventure_list(
                 target_message=query.message,
                 user_id=user_id,
                 edit=True,
+                offset=offset,
             )
             return
 

@@ -1,0 +1,59 @@
+"""Tests for the adventure selector / auto-rename / fromchat fixes."""
+
+from __future__ import annotations
+
+import sqlite3
+
+import pytest
+
+from app.interfaces.telegram.adapter import TelegramAdapter
+
+
+@pytest.mark.parametrize(
+    "title,is_placeholder",
+    [
+        ("Adventure #12", True),
+        ("Adventure #", True),
+        ("Adventure with Chloe", True),
+        ("Converted Adventure", True),
+        ("Untitled Adventure", True),
+        ("New Adventure", True),
+        ("Quick Adventure", True),
+        ("", True),
+        (None, True),
+        # Real, user-meaningful titles must be preserved (never auto-overridden).
+        ("Mansion of Moist Mischief", False),
+        ("Old Mother Vane and the Darkness", False),
+        ("Sailor Moon at Hogwarts", False),
+    ],
+)
+def test_is_placeholder_adventure_title(title, is_placeholder):
+    assert TelegramAdapter._is_placeholder_adventure_title(title) is is_placeholder
+
+
+def test_adventure_messages_role_constraint_rejects_assistant():
+    """Documents why fromchat must map assistant -> narrator.
+
+    adventure_messages only allows user/character/narrator/system; inserting the
+    raw 'assistant' role from the messages table violates the CHECK constraint.
+    """
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        """
+        CREATE TABLE adventure_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            adventure_id INTEGER NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('user', 'character', 'narrator', 'system')),
+            content TEXT NOT NULL
+        )
+        """
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO adventure_messages (adventure_id, role, content) VALUES (1, 'assistant', 'hi')"
+        )
+    # The mapped role used by the fix is accepted.
+    conn.execute(
+        "INSERT INTO adventure_messages (adventure_id, role, content) VALUES (1, 'narrator', 'hi')"
+    )
+    assert conn.execute("SELECT COUNT(*) FROM adventure_messages").fetchone()[0] == 1
