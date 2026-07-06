@@ -12,6 +12,7 @@ nothing here feeds the wellness/psych analysis pipeline.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -138,6 +139,70 @@ class WebappService:
             {"role": r["role"], "content": r["content"], "timestamp": r["timestamp"]}
             for r in reversed(rows)
         ]
+
+    # -- creation ----------------------------------------------------------
+    async def create_adventure(
+        self,
+        db_user_id: int,
+        *,
+        title: str,
+        premise: str = "",
+        player_role: str = "",
+    ) -> Dict[str, Any]:
+        """Create a new adventure from a premise and generate its opening scene."""
+        title = sanitize_untrusted_text(title, limit=80).strip() or "Untitled Adventure"
+        premise = sanitize_untrusted_text(premise, limit=2000).strip()
+        player_role = sanitize_untrusted_text(player_role, limit=300).strip()
+
+        settings = {
+            "reply_length": "moderate",
+            "choice_mode": False,
+            "player_role": player_role,
+            "objective": "",
+            "setting": "",
+            "tone_notes": "",
+            "last_lore_message_id": 0,
+        }
+        lore = premise or "A new story begins."
+        with db_rw() as conn:
+            conn.execute(
+                "INSERT INTO adventures(user_id, title, description, lore, status, settings) "
+                "VALUES (?, ?, ?, ?, 'active', ?)",
+                (db_user_id, title, premise, lore, json.dumps(settings)),
+            )
+            adventure_id = int(
+                conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+            )
+
+        opening = await self._opening_scene(db_user_id, title, premise, player_role)
+        self._insert_message(adventure_id, "narrator", opening)
+        return {"id": adventure_id, "title": title, "opening": opening}
+
+    async def _opening_scene(
+        self, db_user_id: int, title: str, premise: str, player_role: str
+    ) -> str:
+        system = (
+            "You are a creative roleplay narrator opening a brand-new interactive "
+            "text adventure. Write an immersive opening scene of 2 to 3 short "
+            "paragraphs in second person ('you'). Establish the setting, mood, and "
+            "an immediate hook, then end at a moment that invites the player's first "
+            "action. Do not explain or summarize; begin the story directly."
+        )
+        user = (
+            f"Adventure title: {title}\n"
+            f"Premise: {premise or '(none given; invent something evocative)'}\n"
+            f"The player is: {player_role or 'an unnamed protagonist'}\n\n"
+            "Opening scene:"
+        )
+        response = await chat_async(
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            model=self._resolve_model(db_user_id),
+        )
+        text = str(response.get("text") or "").strip() if isinstance(response, dict) else ""
+        return sanitize_untrusted_text(text, limit=8000) or "The story begins. What do you do?"
 
     # -- turn generation ---------------------------------------------------
     def _nsfw_context(self, db_user_id: int) -> str:

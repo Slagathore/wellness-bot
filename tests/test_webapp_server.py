@@ -181,6 +181,35 @@ def test_erase_removes_last_exchange(client, test_user, mock_narrator):
     assert _messages(client, adv_id, telegram_id) == []
 
 
+def test_create_adventure(client, test_user, mock_narrator):
+    _db_user_id, telegram_id = test_user
+    headers = _auth_header(telegram_id)
+    resp = client.post(
+        "/api/adventures",
+        headers=headers,
+        json={"title": "The Sunken City", "premise": "A diver finds a door underwater.", "player_role": "a treasure hunter"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    adv_id = body["id"]
+    assert body["title"] == "The Sunken City"
+    assert body["opening"]
+
+    # It shows in the list and has an opening narrator message.
+    listing = client.get("/api/adventures", headers=headers).json()
+    assert any(a["id"] == adv_id for a in listing["items"])
+    msgs = _messages(client, adv_id, telegram_id)
+    assert len(msgs) == 1 and msgs[0]["role"] == "narrator"
+
+
+def test_create_adventure_requires_title_or_premise(client, test_user, mock_narrator):
+    _db_user_id, telegram_id = test_user
+    resp = client.post(
+        "/api/adventures", headers=_auth_header(telegram_id), json={"title": "", "premise": ""}
+    )
+    assert resp.status_code == 400
+
+
 def test_cannot_access_another_users_adventure(client, test_user):
     _db_user_id, telegram_id = test_user
     # Adventure owned by a different user id.

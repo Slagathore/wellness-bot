@@ -60,6 +60,12 @@ class TurnRequest(BaseModel):
     mode: str = "do"  # do | say | story
 
 
+class CreateAdventureRequest(BaseModel):
+    title: str
+    premise: str = ""
+    player_role: str = ""
+
+
 @app.get("/healthz")
 async def healthz() -> Dict[str, str]:
     return {"status": "ok"}
@@ -88,6 +94,20 @@ async def api_adventures(
     offset: int = 0, limit: int = 20, user_id: int = Depends(current_user_id)
 ) -> Dict[str, Any]:
     return service.list_adventures(user_id, offset=offset, limit=limit)
+
+
+@app.post("/api/adventures", response_class=JSONResponse)
+async def api_create_adventure(
+    payload: CreateAdventureRequest, user_id: int = Depends(current_user_id)
+) -> Dict[str, Any]:
+    if not payload.title.strip() and not payload.premise.strip():
+        raise HTTPException(status_code=400, detail="title or premise required")
+    return await service.create_adventure(
+        user_id,
+        title=payload.title,
+        premise=payload.premise,
+        player_role=payload.player_role,
+    )
 
 
 @app.get("/api/adventures/{adventure_id}", response_class=JSONResponse)
