@@ -181,6 +181,10 @@ def build_legacy_system_prompt(
     """
 
     raw_system = str(personality_config.get("system_prompt") or "").strip()
+    # Custom-character / persona system prompts are user- or LLM-authored. Strip
+    # any planted completion sentinel so it can't fake completion or defeat the
+    # sentinel-append safeguard in build_prompt_with_system_prompt.
+    raw_system = raw_system.replace(RESPONSE_COMPLETION_SENTINEL, "")
     if raw_system:
         system_prompt = (
             f"[ACTIVE PERSONALITY MODE: {personality_name.upper()}]\n"
