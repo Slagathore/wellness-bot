@@ -11,10 +11,13 @@ nothing here feeds the wellness/psych analysis pipeline.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
 from app.db import db_ro, db_rw
+from app.domain.adventure.lore import (lore_refresh_due,
+                                       refresh_adventure_lore)
 from app.utils.ollama import chat_async
 from app.utils.prompt_safety import sanitize_untrusted_text
 
@@ -22,6 +25,10 @@ logger = logging.getLogger(__name__)
 
 _RECENT_TURNS = 24
 _MAX_TURN_CHARS = 4000
+_VALID_MODES = ("do", "say", "story")
+
+# Keep references to fire-and-forget lore-refresh tasks so they aren't GC'd.
+_LORE_TASKS: set = set()
 
 
 class AdventureNotFound(Exception):
@@ -166,13 +173,31 @@ class WebappService:
             prompt += f"\n\n{nsfw_ctx.strip()}"
         return prompt
 
-    async def generate_turn(
-        self, db_user_id: int, adventure_id: int, text: str
-    ) -> Dict[str, Any]:
-        text = (text or "").strip()
-        if not text:
-            raise ValueError("empty turn")
+    @staticmethod
+    def _format_player_input(text: str, mode: str) -> tuple[str, str]:
+        """Return (adventure_role, stored_content) for an AI-Dungeon-style input.
 
+        - do:    an action ("I raise my lantern") -> role 'user'
+        - say:   dialogue -> role 'user', quoted so it reads as speech
+        - story: player-authored narration inserted directly -> role 'narrator'
+        """
+        text = text.strip()
+        if mode == "say":
+            body = text.strip().strip('"').strip()
+            return "user", f'You say, "{body}"'
+        if mode == "story":
+            return "narrator", text
+        return "user", text  # do
+
+    def _resolve_model(self, db_user_id: int) -> Optional[str]:
+        try:
+            from app.orchestrator.persona_runtime import resolve_user_model
+
+            return resolve_user_model(db_user_id)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _load_turn_context(self, db_user_id: int, adventure_id: int):
         with db_ro() as conn:
             adv = self._owned_adventure(conn, db_user_id, adventure_id)
             char_rows = conn.execute(
@@ -186,45 +211,115 @@ class WebappService:
                 "WHERE adventure_id = ? ORDER BY id DESC LIMIT ?",
                 (adventure_id, _RECENT_TURNS),
             ).fetchall()
-
         chars_text = "\n".join(
             f"{(r['emoji'] or '🎭')} {r['display_name']}" for r in char_rows
         ) or "(No named characters yet.)"
         system_prompt = self._build_system_prompt(
             adv, chars_text, self._nsfw_context(db_user_id)
         )
-
-        messages = [{"role": "system", "content": system_prompt}]
+        messages: List[Dict[str, str]] = [{"role": "system", "content": system_prompt}]
         for r in reversed(recent):
             role = "assistant" if r["role"] in ("narrator", "character") else "user"
             messages.append({"role": role, "content": r["content"]})
-        messages.append({"role": "user", "content": text})
+        return messages
 
-        model = None
-        try:
-            from app.orchestrator.persona_runtime import resolve_user_model
-
-            model = resolve_user_model(db_user_id)
-        except Exception:  # noqa: BLE001
-            model = None
-
-        response = await chat_async(messages=messages, model=model)
+    async def _narrate(
+        self, db_user_id: int, adventure_id: int, extra: Optional[Dict[str, str]] = None
+    ) -> str:
+        """Generate one narrator turn from the current adventure state."""
+        messages = self._load_turn_context(db_user_id, adventure_id)
+        if extra:
+            messages.append(extra)
+        response = await chat_async(messages=messages, model=self._resolve_model(db_user_id))
         reply = ""
         if isinstance(response, dict):
             reply = str(response.get("text") or "").strip()
-        reply = sanitize_untrusted_text(reply, limit=8000) or "*The story pauses momentarily...*"
+        return sanitize_untrusted_text(reply, limit=8000) or "*The story pauses momentarily...*"
 
+    def _schedule_lore_refresh(self, adventure_id: int) -> None:
+        if not lore_refresh_due(adventure_id):
+            return
+        try:
+            task = asyncio.create_task(
+                refresh_adventure_lore(adventure_id, chat_fn=chat_async, reason="webapp turn")
+            )
+        except RuntimeError:
+            return  # no running loop (e.g. sync test context)
+        _LORE_TASKS.add(task)
+        task.add_done_callback(_LORE_TASKS.discard)
+
+    @staticmethod
+    def _insert_message(adventure_id: int, role: str, content: str) -> None:
         with db_rw() as conn:
             conn.execute(
-                "INSERT INTO adventure_messages (adventure_id, role, content) VALUES (?, 'user', ?)",
-                (adventure_id, text),
-            )
-            conn.execute(
-                "INSERT INTO adventure_messages (adventure_id, role, content) VALUES (?, 'narrator', ?)",
-                (adventure_id, reply),
+                "INSERT INTO adventure_messages (adventure_id, role, content) VALUES (?, ?, ?)",
+                (adventure_id, role, content),
             )
             conn.execute(
                 "UPDATE adventures SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (adventure_id,),
             )
+
+    async def generate_turn(
+        self, db_user_id: int, adventure_id: int, text: str, *, mode: str = "do"
+    ) -> Dict[str, Any]:
+        text = (text or "").strip()
+        if not text:
+            raise ValueError("empty turn")
+        if mode not in _VALID_MODES:
+            mode = "do"
+
+        # Verify ownership BEFORE writing anything.
+        with db_ro() as conn:
+            self._owned_adventure(conn, db_user_id, adventure_id)
+
+        role, stored = self._format_player_input(text, mode)
+        self._insert_message(adventure_id, role, stored)
+        reply = await self._narrate(db_user_id, adventure_id)
+        self._insert_message(adventure_id, "narrator", reply)
+        self._schedule_lore_refresh(adventure_id)
+        return {"reply": reply, "player": {"role": role, "content": stored}}
+
+    async def continue_story(self, db_user_id: int, adventure_id: int) -> Dict[str, Any]:
+        """Generate more narration with no new player input."""
+        reply = await self._narrate(
+            db_user_id,
+            adventure_id,
+            extra={"role": "user", "content": "(Continue the story from where it left off.)"},
+        )
+        self._insert_message(adventure_id, "narrator", reply)
+        self._schedule_lore_refresh(adventure_id)
         return {"reply": reply}
+
+    async def retry_last(self, db_user_id: int, adventure_id: int) -> Dict[str, Any]:
+        """Regenerate the most recent narrator turn."""
+        with db_rw() as conn:
+            self._owned_adventure(conn, db_user_id, adventure_id)
+            last = conn.execute(
+                "SELECT id, role FROM adventure_messages "
+                "WHERE adventure_id = ? ORDER BY id DESC LIMIT 1",
+                (adventure_id,),
+            ).fetchone()
+            if last and last["role"] in ("narrator", "character"):
+                conn.execute("DELETE FROM adventure_messages WHERE id = ?", (last["id"],))
+        reply = await self._narrate(db_user_id, adventure_id)
+        self._insert_message(adventure_id, "narrator", reply)
+        return {"reply": reply}
+
+    def erase_last(self, db_user_id: int, adventure_id: int) -> Dict[str, Any]:
+        """Remove the last exchange (narrator reply + preceding player action)."""
+        removed = 0
+        with db_rw() as conn:
+            self._owned_adventure(conn, db_user_id, adventure_id)
+            rows = conn.execute(
+                "SELECT id, role FROM adventure_messages "
+                "WHERE adventure_id = ? ORDER BY id DESC LIMIT 2",
+                (adventure_id,),
+            ).fetchall()
+            if rows and rows[0]["role"] in ("narrator", "character"):
+                conn.execute("DELETE FROM adventure_messages WHERE id = ?", (rows[0]["id"],))
+                removed += 1
+                if len(rows) > 1 and rows[1]["role"] == "user":
+                    conn.execute("DELETE FROM adventure_messages WHERE id = ?", (rows[1]["id"],))
+                    removed += 1
+        return {"removed": removed}

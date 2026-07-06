@@ -57,6 +57,7 @@ async def current_user_id(request: Request) -> int:
 
 class TurnRequest(BaseModel):
     text: str
+    mode: str = "do"  # do | say | story
 
 
 @app.get("/healthz")
@@ -116,11 +117,43 @@ async def api_turn(
     user_id: int = Depends(current_user_id),
 ) -> Dict[str, Any]:
     try:
-        return await service.generate_turn(user_id, adventure_id, payload.text)
+        return await service.generate_turn(
+            user_id, adventure_id, payload.text, mode=payload.mode
+        )
     except AdventureNotFound:
         raise HTTPException(status_code=404, detail="adventure not found")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/adventures/{adventure_id}/continue", response_class=JSONResponse)
+async def api_continue(
+    adventure_id: int, user_id: int = Depends(current_user_id)
+) -> Dict[str, Any]:
+    try:
+        return await service.continue_story(user_id, adventure_id)
+    except AdventureNotFound:
+        raise HTTPException(status_code=404, detail="adventure not found")
+
+
+@app.post("/api/adventures/{adventure_id}/retry", response_class=JSONResponse)
+async def api_retry(
+    adventure_id: int, user_id: int = Depends(current_user_id)
+) -> Dict[str, Any]:
+    try:
+        return await service.retry_last(user_id, adventure_id)
+    except AdventureNotFound:
+        raise HTTPException(status_code=404, detail="adventure not found")
+
+
+@app.post("/api/adventures/{adventure_id}/erase", response_class=JSONResponse)
+async def api_erase(
+    adventure_id: int, user_id: int = Depends(current_user_id)
+) -> Dict[str, Any]:
+    try:
+        return service.erase_last(user_id, adventure_id)
+    except AdventureNotFound:
+        raise HTTPException(status_code=404, detail="adventure not found")
 
 
 def run(host: str | None = None, port: int | None = None) -> None:

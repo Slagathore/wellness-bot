@@ -99,6 +99,88 @@ def test_turn_generates_and_persists(client, test_user, monkeypatch):
     assert msgs[0]["content"] == "I look around"
 
 
+@pytest.fixture
+def mock_narrator(monkeypatch):
+    import app.interfaces.webapp.service as svc
+
+    async def fake_chat_async(messages, model=None, options=None):
+        return {"text": "The story advances.", "raw": {}}
+
+    monkeypatch.setattr(svc, "chat_async", fake_chat_async)
+    # Avoid scheduling background lore refresh in tests.
+    monkeypatch.setattr(svc.WebappService, "_schedule_lore_refresh", lambda self, aid: None)
+
+
+def _messages(client, adv_id, telegram_id):
+    return client.get(
+        f"/api/adventures/{adv_id}/messages", headers=_auth_header(telegram_id)
+    ).json()["messages"]
+
+
+def test_say_mode_formats_dialogue(client, test_user, mock_narrator):
+    db_user_id, telegram_id = test_user
+    adv_id = _make_adventure(db_user_id)
+    client.post(
+        f"/api/adventures/{adv_id}/turn",
+        headers=_auth_header(telegram_id),
+        json={"text": "hello there", "mode": "say"},
+    )
+    msgs = _messages(client, adv_id, telegram_id)
+    assert msgs[0]["content"] == 'You say, "hello there"'
+    assert msgs[0]["role"] == "user"
+
+
+def test_story_mode_inserts_narration(client, test_user, mock_narrator):
+    db_user_id, telegram_id = test_user
+    adv_id = _make_adventure(db_user_id)
+    client.post(
+        f"/api/adventures/{adv_id}/turn",
+        headers=_auth_header(telegram_id),
+        json={"text": "Rain begins to fall.", "mode": "story"},
+    )
+    msgs = _messages(client, adv_id, telegram_id)
+    # Player-authored narration is stored as narrator, then the AI narrates.
+    assert msgs[0]["role"] == "narrator" and msgs[0]["content"] == "Rain begins to fall."
+    assert msgs[1]["role"] == "narrator"
+
+
+def test_continue_adds_narration_without_user_message(client, test_user, mock_narrator):
+    db_user_id, telegram_id = test_user
+    adv_id = _make_adventure(db_user_id)
+    client.post(f"/api/adventures/{adv_id}/continue", headers=_auth_header(telegram_id))
+    msgs = _messages(client, adv_id, telegram_id)
+    assert [m["role"] for m in msgs] == ["narrator"]
+
+
+def test_retry_replaces_last_narrator(client, test_user, mock_narrator):
+    db_user_id, telegram_id = test_user
+    adv_id = _make_adventure(db_user_id)
+    client.post(
+        f"/api/adventures/{adv_id}/turn",
+        headers=_auth_header(telegram_id),
+        json={"text": "I look around", "mode": "do"},
+    )
+    before = _messages(client, adv_id, telegram_id)
+    assert len(before) == 2
+    client.post(f"/api/adventures/{adv_id}/retry", headers=_auth_header(telegram_id))
+    after = _messages(client, adv_id, telegram_id)
+    assert len(after) == 2  # still one exchange (narrator regenerated, not appended)
+    assert [m["role"] for m in after] == ["user", "narrator"]
+
+
+def test_erase_removes_last_exchange(client, test_user, mock_narrator):
+    db_user_id, telegram_id = test_user
+    adv_id = _make_adventure(db_user_id)
+    client.post(
+        f"/api/adventures/{adv_id}/turn",
+        headers=_auth_header(telegram_id),
+        json={"text": "I look around", "mode": "do"},
+    )
+    resp = client.post(f"/api/adventures/{adv_id}/erase", headers=_auth_header(telegram_id))
+    assert resp.json()["removed"] == 2
+    assert _messages(client, adv_id, telegram_id) == []
+
+
 def test_cannot_access_another_users_adventure(client, test_user):
     _db_user_id, telegram_id = test_user
     # Adventure owned by a different user id.
