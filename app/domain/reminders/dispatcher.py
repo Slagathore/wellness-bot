@@ -368,7 +368,10 @@ class ReminderDispatcher:
 
         freq = metadata.get("frequency")
         cron_expr = metadata.get("cadence_cron") or freq
-        if not cron_expr or freq == "once":
+        # Guard on the resolved cadence, not `freq`: a recurring reminder can have
+        # cadence_cron set (e.g. "0 * * * *") while payload.frequency == "once".
+        # Checking freq here would drop the next run and disable the reminder.
+        if not cron_expr or str(cron_expr).strip().lower() == "once":
             return None
 
         now = operator_now()

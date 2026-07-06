@@ -1473,7 +1473,11 @@ async def app_metrics(
     hours = max(1, min(hours, 168))
     now = datetime.utcnow()
     window_start = now - timedelta(hours=hours)
-    in_hour = now + timedelta(hours=1)
+    # next_run_at is stored in operator-local time, so compare it against an
+    # operator-time cutoff (not UTC). Normalize the space/"T" separator so both
+    # storage variants compare correctly.
+    from app.utils.time_utils import operator_now
+    op_in_hour = (operator_now() + timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
     data: Dict[str, Any] = {}
     try:
         with db_ro() as conn:
@@ -1485,8 +1489,9 @@ async def app_metrics(
                 (window_start.isoformat(),),
             ).fetchone()[0]
             data["reminders_due_next_hour"] = conn.execute(
-                "SELECT COUNT(*) FROM reminders WHERE enabled = 1 AND next_run_at <= ?",
-                (in_hour.isoformat(),),
+                "SELECT COUNT(*) FROM reminders WHERE enabled = 1 "
+                "AND REPLACE(SUBSTR(next_run_at, 1, 19), 'T', ' ') <= ?",
+                (op_in_hour,),
             ).fetchone()[0]
             data["reminders_total"] = conn.execute(
                 "SELECT COUNT(*) FROM reminders"
