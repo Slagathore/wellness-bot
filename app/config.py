@@ -65,26 +65,6 @@ class Settings(BaseSettings):
     dm_image_enabled: bool = True
     dm_image_timeout_seconds: float = 300.0
 
-    # External image backends
-    flux2_klein_url: str = "http://127.0.0.1:7865"
-    flux2_klein_host: str = "0.0.0.0"
-    flux2_klein_port: int = 7865
-    flux2_klein_timeout_seconds: float = 900.0
-    flux2_klein_gguf_path: str = ""
-    flux2_klein_base_repo: str = "black-forest-labs/FLUX.2-klein-9B"
-    flux2_klein_use_torch_compile: bool = False
-    media_use_torch_compile: bool = False
-    easy_diffusion_url: str = "http://127.0.0.1:9000"
-    easy_diffusion_model: str | None = None
-    easy_diffusion_vae_model: str | None = None
-    easy_diffusion_sampler: str | None = None
-    easy_diffusion_vram_usage_level: str = "balanced"
-    easy_diffusion_timeout_seconds: float = 900.0
-    perchance_timeout_seconds: float = 180.0
-    perchance_use_persistent_profile: bool = True
-    perchance_other_url: str = "https://perchance.org/imageapi"
-    perchance_other_timeout_seconds: float = 90.0
-
     # Filesystem
     data_root: str = "/data/telegram_wellness_bot"
     database_path: str = "/data/telegram_wellness_bot/telegram_wellness.db"

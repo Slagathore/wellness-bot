@@ -11,7 +11,6 @@ import asyncio
 import json
 import logging
 import re
-import shlex
 import shutil
 import subprocess
 import time
@@ -37,7 +36,7 @@ from app.services.dm_image import ImageUnavailable, generate_image, is_enabled
 from app.domain.safety.resources import CRISIS_RESOURCE_MESSAGE
 from app.domain.turns.audit import append_turn_route, build_route_entry, create_turn_audit
 from app.feature_flags import enabled
-from app.history_scope import history_scope_for_user, table_has_column
+from app.history_scope import table_has_column
 from app.monitoring_latency import record_message_timing
 from app.orchestrator.context_builder import schedule_session_summary
 from app.orchestrator.persona_runtime import resolve_user_model
@@ -228,8 +227,6 @@ def _build_help_text() -> str:
         "  /personality <mode> - Change personality",
         "  /setmodel <name> - Set AI model",
         "  /addreminder <time> <text> - Create reminder",
-        "  /generate_image <prompt> - AI image",
-        "  /generate_video <prompt> - AI video",
         "  /character adventure - Turn current character chat into an adventure",
         "  /adventure new <title> - New adventure",
         "  /adventure quick <title> - Quick-create an adventure",
@@ -296,10 +293,6 @@ def _build_help_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("⏰ Reminders", callback_data="cmd_reminders"),
             InlineKeyboardButton("🚫 Cancel All", callback_data="cmd_cancelreminders"),
         ],
-        [
-            InlineKeyboardButton("🖼 Image Help", callback_data="cmd_generate_image"),
-            InlineKeyboardButton("🎬 Video Help", callback_data="cmd_generate_video"),
-        ],
         # -- Data --
         [
             InlineKeyboardButton("📤 Export Data", callback_data="cmd_export"),
@@ -326,7 +319,6 @@ class TelegramAdapter:
     def __init__(self) -> None:
         event_bus.subscribe(events.EVENT_SEND_REPLY, self._on_send_reply, mode="async")
         self._application: Application | None = None
-        self._active_media_jobs: dict[int, asyncio.Task[Any]] = {}
         self._active_adventure_lore_jobs: dict[int, asyncio.Task[Any]] = {}
 
     # -- helpers ---------------------------------------------------------------
@@ -339,279 +331,16 @@ class TelegramAdapter:
         )
 
     @staticmethod
-    def _default_image_model() -> str:
-        return "flux2-klein"
+    def _strip_media_tags(text: str) -> str:
+        """Remove any residual legacy media-generation tags from a reply.
 
-    @staticmethod
-    def _normalize_media_prompt(prompt: str, *, max_chars: int = 500) -> tuple[str, bool]:
-        cleaned = _remove_leaked_sentinels(str(prompt or ""))
-        cleaned = re.sub(r"(?im)^\s*/generate_(?:image|video)\s+", "", cleaned).strip()
-        cleaned = " ".join(cleaned.split())
-        trimmed = False
-        if len(cleaned) > max_chars:
-            cut = max(
-                cleaned.rfind(". ", 0, max_chars),
-                cleaned.rfind(", ", 0, max_chars),
-                cleaned.rfind(" ", 0, max_chars),
-            )
-            if cut < max_chars // 2:
-                cut = max_chars
-            cleaned = cleaned[:cut].rstrip(" ,.;:") + "."
-            trimmed = True
-        return cleaned, trimmed
-
-    @staticmethod
-    def _extract_media_request_from_reply(text: str) -> tuple[str, dict[str, str] | None]:
-        raw_text = str(text or "")
-        action_match = _MEDIA_ACTION_TAG_RE.search(raw_text)
-        if action_match:
-            media_type = "video" if action_match.group("kind").upper() == "GENERATE_VIDEO" else "image"
-            prompt, trimmed = TelegramAdapter._normalize_media_prompt(action_match.group("prompt") or "")
-            action = {
-                "media_type": media_type,
-                "prompt": prompt,
-                "model": (action_match.group("model") or "").strip(),
-            }
-            if trimmed:
-                action["prompt_trimmed"] = "1"
-            cleaned = _MEDIA_ACTION_TAG_RE.sub("", raw_text, count=1).strip()
-            return cleaned, action
-
-        command_match = _MEDIA_COMMAND_RE.search(raw_text)
-        if command_match:
-            media_type = "video" if command_match.group("kind").lower() == "generate_video" else "image"
-            prompt, trimmed = TelegramAdapter._normalize_media_prompt(command_match.group("prompt") or "")
-            action = {
-                "media_type": media_type,
-                "prompt": prompt,
-                "model": "",
-            }
-            if trimmed:
-                action["prompt_trimmed"] = "1"
-            cleaned = _MEDIA_COMMAND_RE.sub("", raw_text, count=1).strip()
-            return cleaned, action
-
-        return raw_text, None
-
-    def _image_generation_kwargs(
-        self, media_service: Any, model_key: str, flags: dict[str, Any] | None = None
-    ) -> dict[str, Any]:
-        options = dict(media_service.get_image_defaults(model_key))
-        raw_flags = dict(flags or {})
-        if "steps" in raw_flags:
-            options["num_inference_steps"] = int(raw_flags["steps"])
-        if "guidance" in raw_flags:
-            options["guidance_scale"] = float(raw_flags["guidance"])
-        if "width" in raw_flags:
-            options["width"] = int(raw_flags["width"])
-        if "height" in raw_flags:
-            options["height"] = int(raw_flags["height"])
-        if "seed" in raw_flags and str(raw_flags["seed"]).strip():
-            options["seed"] = int(raw_flags["seed"])
-        negative_prompt = (
-            raw_flags.get("negative_prompt")
-            or raw_flags.get("negative")
-            or raw_flags.get("neg")
-        )
-        if negative_prompt:
-            options["negative_prompt"] = str(negative_prompt).strip()
-        source_tags_value = raw_flags.get("source_tags")
-        if source_tags_value:
-            options["source_tags"] = [
-                tag.strip()
-                for tag in str(source_tags_value).split(",")
-                if tag.strip()
-            ]
-        if "animated" in raw_flags:
-            options["animated"] = self._flag_enabled(raw_flags["animated"])
-        if "hires_upscale" in raw_flags:
-            options["hires_upscale"] = self._flag_enabled(raw_flags["hires_upscale"])
-        return options
-
-    @staticmethod
-    def _flag_enabled(value: Any) -> bool:
-        if isinstance(value, bool):
-            return value
-        normalized = str(value or "").strip().lower()
-        if not normalized:
-            return False
-        return normalized not in {"0", "false", "no", "off"}
-
-    def _can_start_media_job(self, chat_id: int) -> bool:
-        task = self._active_media_jobs.get(chat_id)
-        return not bool(task and not task.done())
-
-    def _track_media_job(self, chat_id: int, task: asyncio.Task[Any]) -> None:
-        self._active_media_jobs[chat_id] = task
-
-        def _cleanup(done_task: asyncio.Task[Any]) -> None:
-            current = self._active_media_jobs.get(chat_id)
-            if current is done_task:
-                self._active_media_jobs.pop(chat_id, None)
-
-        task.add_done_callback(_cleanup)
-
-    async def _media_action_pulse(
-        self, chat_id: int, action: str, stop_event: asyncio.Event
-    ) -> None:
-        if not self._application:
-            return
-        while not stop_event.is_set():
-            try:
-                await self._application.bot.send_chat_action(
-                    chat_id=chat_id,
-                    action=action,
-                )
-            except Exception:
-                return
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=4.0)
-            except asyncio.TimeoutError:
-                continue
-
-    async def _launch_assistant_media_job(
-        self,
-        *,
-        chat_id: int,
-        tg_user_id: int,
-        media_type: str,
-        prompt: str,
-        requested_model: str | None = None,
-    ) -> None:
-        if not self._application:
-            return
-        bot = self._application.bot
-        if not self._can_start_media_job(chat_id):
-            await bot.send_message(
-                chat_id=chat_id,
-                text=(
-                    "⏳ I already have a media job running for this chat. "
-                    "I skipped the extra one so the queue doesn't pile up."
-                ),
-            )
-            return
-
-        sessions = container.resolve("user_session_store")
-        db_user_id = sessions.ensure_user(tg_user_id)
-        from app.services.media_generation_service import get_media_service
-
-        media_service = get_media_service()
-        normalized_prompt, trimmed = self._normalize_media_prompt(prompt)
-
-        model_key = (requested_model or "").strip() or (
-            "wan-t2v" if media_type == "video" else self._default_image_model()
-        )
-        extra = "Started from an assistant-triggered media action."
-        if trimmed:
-            extra += "\nPrompt was shortened to fit the interactive media budget."
-        status = await bot.send_message(
-            chat_id=chat_id,
-            text=self._media_status_text(
-                media_type=media_type,
-                prompt=normalized_prompt,
-                model_key=model_key,
-                media_service=media_service,
-                extra=extra,
-            ),
-            parse_mode="Markdown",
-        )
-
-        async def _job() -> None:
-            action_stop = asyncio.Event()
-            action_kind = ChatAction.UPLOAD_VIDEO if media_type == "video" else ChatAction.UPLOAD_PHOTO
-            action_task = asyncio.create_task(
-                self._media_action_pulse(chat_id, action_kind, action_stop)
-            )
-            try:
-                if media_type == "video":
-                    result = await asyncio.to_thread(
-                        media_service.generate_video,
-                        prompt=normalized_prompt,
-                        user_id=db_user_id,
-                        model_key=model_key,
-                        num_frames=33,
-                        fps=16,
-                        epoch=10 if model_key == "wan-t2v" else None,
-                        width=480,
-                        height=320,
-                        num_inference_steps=30,
-                        guidance_scale=7.5,
-                    )
-                    if result.get("status") == "success":
-                        upload_started = time.perf_counter()
-                        with open(result["video_path"], "rb") as vid_file:
-                            await bot.send_video(
-                                chat_id=chat_id,
-                                video=vid_file,
-                                caption=(
-                                    f"🎬 **Video Generated!**\n\n"
-                                    f"**Model:** {result['model']}\n"
-                                    f"**Time:** {result['generation_time_ms'] / 1000:.1f}s"
-                                ),
-                                parse_mode="Markdown",
-                            )
-                        logger.info(
-                            "[MEDIA-TELEMETRY] type=video model=%s total_ms=%s upload_ms=%d source=assistant",
-                            result.get("model", model_key),
-                            result.get("generation_time_ms"),
-                            int((time.perf_counter() - upload_started) * 1000),
-                        )
-                        await status.delete()
-                    else:
-                        await status.edit_text(
-                            f"❌ **Video Generation Failed**\n\n**Error:** {result.get('error', 'Unknown error')}",
-                            parse_mode="Markdown",
-                        )
-                else:
-                    image_kwargs = self._image_generation_kwargs(media_service, model_key)
-                    result = await asyncio.to_thread(
-                        media_service.generate_image,
-                        prompt=normalized_prompt,
-                        user_id=db_user_id,
-                        model_key=model_key,
-                        **image_kwargs,
-                    )
-                    if result.get("status") == "success":
-                        upload_started = time.perf_counter()
-                        with open(result["image_path"], "rb") as img_file:
-                            await bot.send_photo(
-                                chat_id=chat_id,
-                                photo=img_file,
-                                caption=(
-                                    f"🎨 **Image Generated!**\n\n"
-                                    f"**Model:** {result['model']}\n"
-                                    f"**Total:** {result['generation_time_ms'] / 1000:.1f}s"
-                                ),
-                                parse_mode="Markdown",
-                            )
-                        logger.info(
-                            "[MEDIA-TELEMETRY] type=image model=%s total_ms=%s load_ms=%s inference_ms=%s save_ms=%s upload_ms=%d source=assistant",
-                            result.get("model", model_key),
-                            result.get("generation_time_ms"),
-                            result.get("load_time_ms"),
-                            result.get("inference_time_ms"),
-                            result.get("save_time_ms"),
-                            int((time.perf_counter() - upload_started) * 1000),
-                        )
-                        await status.delete()
-                    else:
-                        await status.edit_text(
-                            f"❌ **Image Generation Failed**\n\n**Error:** {result.get('error', 'Unknown error')}",
-                            parse_mode="Markdown",
-                        )
-            except Exception as exc:  # noqa: BLE001
-                logger.error("Assistant media generation error: %s", exc, exc_info=True)
-                with suppress(Exception):
-                    await status.edit_text(f"❌ **Media Generation Error**\n\n{exc}", parse_mode="Markdown")
-            finally:
-                action_stop.set()
-                with suppress(Exception):
-                    await asyncio.wait_for(action_task, timeout=0.2)
-                if not action_task.done():
-                    action_task.cancel()
-
-        task = asyncio.create_task(_job())
-        self._track_media_job(chat_id, task)
+        Image generation now happens via /imagine (Telegram) and the Mini App
+        image button; the model is instructed not to emit tags, but this strips
+        any stray ones so they never surface as visible text.
+        """
+        cleaned = _MEDIA_ACTION_TAG_RE.sub("", str(text or ""))
+        cleaned = _MEDIA_COMMAND_RE.sub("", cleaned)
+        return cleaned.strip()
 
     def _get_personality_manager(self):
         """Lazy-load a PersonalityManager instance."""
@@ -1943,14 +1672,6 @@ class TelegramAdapter:
 
         # LLM settings
         app.add_handler(CommandHandler("settings", self._on_settings_command))
-
-        # Image/video generation
-        app.add_handler(
-            CommandHandler("generate_image", self._on_generate_image_command)
-        )
-        app.add_handler(
-            CommandHandler("generate_video", self._on_generate_video_command)
-        )
 
         # Callback query handler for inline buttons
         app.add_handler(CallbackQueryHandler(self._on_callback_query))
@@ -4809,661 +4530,6 @@ class TelegramAdapter:
             "Data has been archived offline. You can use /start to create a new account."
         )
 
-    # -- Plaintext media intent detection & handling ---------------------------
-
-    _IMAGE_TYPE_WORDS = frozenset({
-        "picture", "image", "photo", "illustration", "drawing",
-        "painting", "artwork", "portrait", "sketch", "render",
-    })
-    _VIDEO_TYPE_WORDS = frozenset({
-        "video", "animation", "clip", "movie", "gif",
-    })
-
-    @staticmethod
-    def _detect_media_intent(text: str) -> tuple[str, str] | None:
-        """Detect if *text* is a plaintext request to generate media.
-
-        Returns ``("image", prompt)`` or ``("video", prompt)`` when intent is
-        detected, otherwise ``None``.
-        """
-        if not text or len(text) < 10:
-            return None
-
-        for pattern in (_MEDIA_INTENT_RE, _MEDIA_WANT_RE):
-            m = pattern.search(text)
-            if m:
-                media_word = m.group("media_type").lower().strip()
-                prompt = m.group("prompt").strip().rstrip(".!?")
-                if not prompt or len(prompt) < 2:
-                    continue
-                if media_word in TelegramAdapter._VIDEO_TYPE_WORDS:
-                    return ("video", prompt)
-                return ("image", prompt)
-        scene_match = _MEDIA_SCENE_RE.search(text)
-        if scene_match:
-            prompt = scene_match.group("prompt").strip().rstrip(".!?")
-            if prompt:
-                return ("image", prompt)
-        return None
-
-    @staticmethod
-    def _media_prompt_needs_context(prompt: str) -> bool:
-        lowered = str(prompt or "").strip().lower()
-        if not lowered:
-            return False
-        generic_markers = (
-            "what the scene looks like",
-            "what this scene looks like",
-            "what it looks like",
-            "show me the scene",
-            "the scene",
-            "this scene",
-            "that scene",
-            "the setting",
-            "this setting",
-            "the room",
-            "this room",
-            "the view",
-            "this view",
-        )
-        return any(marker in lowered for marker in generic_markers)
-
-    def _recent_media_context(self, user_id: int, *, limit: int = 8) -> str:
-        scope = history_scope_for_user(user_id)
-        try:
-            with db_ro() as conn:
-                if table_has_column("messages", "scope"):
-                    rows = conn.execute(
-                        """
-                        SELECT role, content
-                        FROM messages
-                        WHERE user_id = ?
-                          AND COALESCE(scope, 'standard') = ?
-                          AND content <> ''
-                        ORDER BY id DESC
-                        LIMIT ?
-                        """,
-                        (user_id, scope, limit),
-                    ).fetchall()
-                else:
-                    rows = conn.execute(
-                        """
-                        SELECT role, content
-                        FROM messages
-                        WHERE user_id = ?
-                          AND content <> ''
-                        ORDER BY id DESC
-                        LIMIT ?
-                        """,
-                        (user_id, limit),
-                    ).fetchall()
-        except Exception:
-            return ""
-        if not rows:
-            return ""
-        lines: list[str] = []
-        for row in reversed(rows):
-            role = str(row["role"] or "message")
-            content = " ".join(str(row["content"] or "").split())
-            if not content:
-                continue
-            lines.append(f"{role}: {content[:220]}")
-        return "\n".join(lines)
-
-    async def _prepare_media_prompt(self, prompt: str, media_type: str, user_id: int) -> str:
-        prepared, _ = self._normalize_media_prompt(prompt)
-        if self._media_prompt_needs_context(prepared):
-            recent_context = self._recent_media_context(user_id)
-            if recent_context:
-                prepared = (
-                    f"{prepared}\n\n"
-                    "Use the recent conversation context below to infer the actual scene, "
-                    "characters, environment, mood, and framing.\n"
-                    f"{recent_context}"
-                )
-        if len(prepared.split()) < 15 or self._media_prompt_needs_context(prompt):
-            enhanced = await self._enhance_media_prompt(prepared, media_type)
-            if enhanced != prepared:
-                prepared, _ = self._normalize_media_prompt(enhanced)
-        return prepared
-
-    @staticmethod
-    def _media_status_text(
-        *,
-        media_type: str,
-        prompt: str,
-        model_key: str,
-        media_service: Any,
-        extra: str = "",
-    ) -> str:
-        current_model = str(getattr(media_service, "current_model", "") or "")
-        if current_model and current_model != model_key:
-            pipeline_note = f"Switching VRAM model: unload `{current_model}` then load `{model_key}`."
-        elif current_model == model_key and current_model:
-            pipeline_note = f"Reusing loaded VRAM model: `{model_key}`."
-        else:
-            pipeline_note = f"Loading `{model_key}` into VRAM."
-        heading = "🎬 Generating video..." if media_type == "video" else "🎨 Generating image..."
-        wait_hint = (
-            "This may take 2-5 minutes. Please wait..."
-            if media_type == "video"
-            else "This may take 30-90 seconds. Please wait..."
-        )
-        lines = [
-            heading,
-            "",
-            f"**Prompt:** {prompt[:200]}{'...' if len(prompt) > 200 else ''}",
-            f"**Model:** {model_key}",
-        ]
-        if extra:
-            lines.append(extra)
-        lines.extend(["", pipeline_note, wait_hint])
-        return "\n".join(lines)
-
-    async def _handle_plaintext_media(
-        self,
-        media_type: str,
-        prompt: str,
-        user_id: int,
-        update: Update,
-        flags: dict[str, Any] | None = None,
-    ) -> None:
-        """Generate and send media from a plaintext request.
-
-        Reuses the same generation + enhance logic as the slash commands.
-        """
-        if not update.message:
-            return
-        message = update.message
-        chat_id = message.chat_id
-        from app.services.media_generation_service import get_media_service
-
-        media_service = get_media_service()
-        flags = dict(flags or {})
-        prompt = await self._prepare_media_prompt(prompt, media_type, user_id)
-
-        if media_type == "video":
-            model_key = str(flags.get("model") or "wan-t2v").strip() or "wan-t2v"
-            epoch = int(flags.get("epoch", 10)) if model_key == "wan-t2v" else None
-            status_msg = await message.reply_text(
-                self._media_status_text(
-                    media_type="video",
-                    prompt=prompt,
-                    model_key=model_key,
-                    media_service=media_service,
-                )
-            )
-            if not self._can_start_media_job(chat_id):
-                await status_msg.edit_text(
-                    "⏳ A media job is already running in this chat.\n\n"
-                    "You can keep chatting, but wait for the current image/video to finish before starting another."
-                )
-                return
-
-            async def _job() -> None:
-                action_stop = asyncio.Event()
-                action_task = asyncio.create_task(
-                    self._media_action_pulse(chat_id, ChatAction.UPLOAD_VIDEO, action_stop)
-                )
-                try:
-                    result = await asyncio.to_thread(
-                        media_service.generate_video,
-                        prompt=prompt,
-                        user_id=user_id,
-                        model_key=model_key,
-                        num_frames=int(flags.get("frames", 33)),
-                        fps=int(flags.get("fps", 16)),
-                        epoch=epoch,
-                        width=int(flags.get("width", 480)),
-                        height=int(flags.get("height", 320)),
-                        num_inference_steps=int(flags.get("steps", 30)),
-                        guidance_scale=float(flags.get("guidance", 7.5)),
-                    )
-                    if result.get("status") == "success":
-                        video_path = result["video_path"]
-                        gen_time = result["generation_time_ms"] / 1000
-                        upload_started = time.perf_counter()
-                        try:
-                            with open(video_path, "rb") as vid_file:
-                                await message.reply_video(
-                                    video=vid_file,
-                                    caption=(
-                                        f"🎬 **Video Generated!**\n\n**Prompt:** {prompt[:200]}\n"
-                                        f"**Model:** {result['model']}\n**Time:** {gen_time:.1f}s"
-                                    ),
-                                )
-                        except Exception:
-                            with open(video_path, "rb") as vid_file:
-                                await message.reply_document(
-                                    document=vid_file,
-                                    caption=f"🎬 Video generated in {gen_time:.1f}s",
-                                )
-                        logger.info(
-                            "[MEDIA-TELEMETRY] type=video model=%s total_ms=%s upload_ms=%d",
-                            result.get("model", model_key),
-                            result.get("generation_time_ms"),
-                            int((time.perf_counter() - upload_started) * 1000),
-                        )
-                        await status_msg.delete()
-                    else:
-                        error_msg = result.get("error", "Unknown error")
-                        await status_msg.edit_text(
-                            f"❌ **Video Generation Failed**\n\n**Error:** {error_msg}\n\nPlease try again."
-                        )
-                except Exception as exc:  # noqa: BLE001
-                    logger.error("Plaintext video generation error: %s", exc, exc_info=True)
-                    with suppress(Exception):
-                        await status_msg.edit_text(f"❌ **Video Generation Error**\n\n{exc}")
-                finally:
-                    action_stop.set()
-                    with suppress(Exception):
-                        await asyncio.wait_for(action_task, timeout=0.2)
-                    if not action_task.done():
-                        action_task.cancel()
-
-            task = asyncio.create_task(_job())
-            self._track_media_job(chat_id, task)
-        else:
-            # Default: image
-            model_key = str(flags.get("model") or self._default_image_model()).strip() or self._default_image_model()
-            image_kwargs = self._image_generation_kwargs(media_service, model_key, flags)
-            status_msg = await message.reply_text(
-                self._media_status_text(
-                    media_type="image",
-                    prompt=prompt,
-                    model_key=model_key,
-                    media_service=media_service,
-                    extra="This runs in the background. You can keep chatting while it renders.",
-                )
-            )
-            if not self._can_start_media_job(chat_id):
-                await status_msg.edit_text(
-                    "⏳ A media job is already running in this chat.\n\n"
-                    "You can keep chatting, but wait for the current image/video to finish before starting another."
-                )
-                return
-
-            async def _job() -> None:
-                action_stop = asyncio.Event()
-                action_task = asyncio.create_task(
-                    self._media_action_pulse(chat_id, ChatAction.UPLOAD_PHOTO, action_stop)
-                )
-                try:
-                    result = await asyncio.to_thread(
-                        media_service.generate_image,
-                        prompt=prompt, user_id=user_id, model_key=model_key,
-                        **image_kwargs,
-                    )
-                    if result.get("status") == "success":
-                        image_path = result["image_path"]
-                        total_time = result["generation_time_ms"] / 1000
-                        load_time = result.get("load_time_ms", 0) / 1000
-                        infer_time = result.get("inference_time_ms", 0) / 1000
-                        save_time = result.get("save_time_ms", 0) / 1000
-                        upload_started = time.perf_counter()
-                        with open(image_path, "rb") as img_file:
-                            await message.reply_photo(
-                                photo=img_file,
-                                caption=(
-                                    f"🎨 **Image Generated!**\n\n**Prompt:** {prompt[:300]}\n"
-                                    f"**Model:** {result['model']}\n"
-                                    f"**Total:** {total_time:.1f}s  |  load {load_time:.1f}s  |  infer {infer_time:.1f}s  |  save {save_time:.1f}s\n"
-                                    f"**Size:** {result['file_size'] / 1024:.1f} KB"
-                                ),
-                            )
-                        logger.info(
-                            "[MEDIA-TELEMETRY] type=image model=%s total_ms=%s load_ms=%s inference_ms=%s save_ms=%s upload_ms=%d",
-                            result.get("model", model_key),
-                            result.get("generation_time_ms"),
-                            result.get("load_time_ms"),
-                            result.get("inference_time_ms"),
-                            result.get("save_time_ms"),
-                            int((time.perf_counter() - upload_started) * 1000),
-                        )
-                        await status_msg.delete()
-                    else:
-                        error_msg = result.get("error", "Unknown error")
-                        await status_msg.edit_text(
-                            f"❌ **Image Generation Failed**\n\n**Error:** {error_msg}\n\nPlease try again."
-                        )
-                except Exception as exc:  # noqa: BLE001
-                    logger.error("Plaintext image generation error: %s", exc, exc_info=True)
-                    with suppress(Exception):
-                        await status_msg.edit_text(f"❌ **Image Generation Error**\n\n{exc}")
-                finally:
-                    action_stop.set()
-                    with suppress(Exception):
-                        await asyncio.wait_for(action_task, timeout=0.2)
-                    if not action_task.done():
-                        action_task.cancel()
-
-            task = asyncio.create_task(_job())
-            self._track_media_job(chat_id, task)
-        #todo: Support --model / --steps / --guidance flags from plaintext (e.g., "draw me a cat in anime style")
-        #todo: Track plaintext media generation usage for analytics
-        #todo: Add cooldown/rate limiting per user for media generation
-        #todo: Offer "try again" / "different style" buttons after generation
-
-    # -- /generate_image & /generate_video -------------------------------------
-
-    @staticmethod
-    def _parse_media_flags(raw_args: list[str]) -> tuple[str, dict[str, Any]]:
-        """Extract --flag values from args, return (prompt, flags)."""
-        flags: dict[str, Any] = {}
-        prompt_parts: list[str] = []
-        boolean_flags = {"animated", "hires_upscale", "no_enhance", "enhance"}
-        i = 0
-        while i < len(raw_args):
-            arg = raw_args[i]
-            if arg.startswith("--"):
-                key = arg[2:]
-                if "=" in key:
-                    split_key, split_val = key.split("=", 1)
-                    if split_key:
-                        flags[split_key.replace("-", "_")] = split_val
-                        i += 1
-                        continue
-                normalized_key = key.replace("-", "_")
-                if normalized_key in boolean_flags:
-                    if i + 1 < len(raw_args):
-                        next_token = str(raw_args[i + 1])
-                        lowered = next_token.strip().lower()
-                        if lowered in {"1", "0", "true", "false", "yes", "no", "on", "off"}:
-                            flags[normalized_key] = lowered in {"1", "true", "yes", "on"}
-                            i += 2
-                            continue
-                    flags[normalized_key] = True
-                    i += 1
-                    continue
-                if i + 1 < len(raw_args):
-                    flags[normalized_key] = raw_args[i + 1]
-                    i += 2
-                    continue
-                prompt_parts.append(arg)
-                i += 1
-            else:
-                prompt_parts.append(arg)
-                i += 1
-        return " ".join(prompt_parts).strip(), flags
-
-    @staticmethod
-    def _parse_media_flags_from_text(text: str) -> tuple[str, dict[str, Any]]:
-        """Extract inline --flags from freeform text like `foo --model bar`."""
-        try:
-            tokens = shlex.split(text or "")
-        except ValueError:
-            tokens = str(text or "").split()
-        return TelegramAdapter._parse_media_flags(tokens)
-
-    async def _enhance_media_prompt(self, short_prompt: str, media_type: str = "image") -> str:
-        """Use the chat LLM to expand a short prompt into a detailed generation prompt."""
-        from app.utils.ollama import chat as ollama_chat
-        sys_prompt = (
-            f"You are a prompt engineer for AI {media_type} generation. "
-            f"The user gave a short description. Expand it into a detailed, vivid prompt "
-            f"optimized for a diffusion model. Include visual details like lighting, style, "
-            f"composition, colors, mood, and atmosphere. Output ONLY the expanded prompt, "
-            f"nothing else. Keep it under 200 words."
-        )
-        try:
-            result = await asyncio.to_thread(
-                ollama_chat,
-                messages=[
-                    {"role": "system", "content": sys_prompt},
-                    {"role": "user", "content": short_prompt},
-                ],
-                options={"temperature": 0.7, "num_predict": 256},
-            )
-            if isinstance(result, dict) and result.get("text"):
-                return result["text"].strip()
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("Prompt enhancement failed: %s", exc)
-        return short_prompt
-
-    async def _on_generate_image_command(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
-        if not update.effective_user or not update.message:
-            return
-        message = update.message
-        chat_id = message.chat_id
-        user_id = self._ensure_user(update.effective_user)
-        raw_args = list(getattr(context, "args", []) or [])
-        prompt, flags = self._parse_media_flags(raw_args)
-        if not prompt:
-            from app.services.media_generation_service import \
-                MediaGenerationService
-            image_models = [
-                f"`{k}` — {v['name']}"
-                for k, v in MediaGenerationService.SUPPORTED_MODELS.items()
-                if v.get("media_type", "image") == "image"
-            ]
-            await message.reply_text(
-                "🎨 **AI Image Generation**\n\nGenerate images using local AI models!\n\n"
-                "**Usage:**\n`/generate_image a serene mountain landscape at sunset`\n\n"
-                "**Options:**\n"
-                "`--model <name>` - Choose model (default: flux2-klein)\n"
-                "`--steps <n>` — Inference steps\n"
-                "`--guidance <n>` — Guidance scale\n\n"
-                "**Available models:**\n" + "\n".join(f"• {m}" for m in image_models) + "\n\n"
-                "**Examples:**\n"
-                "• `/generate_image a cozy reading nook with warm lighting`\n"
-                "• `/generate_image cinematic rainy city skyline --model flux2-klein`\n\n"
-                "• `/generate_image editorial portrait in soft daylight --model z-image-q8-gguf`\n\n"
-                "• `/generate_image rainy neon alley --model easydiffusion`\n\n"
-                "• `/generate_image watercolor fox in a forest clearing --model perchance`\n\n"
-                "• `/generate_image dreamlike crystal cave --model perchance_other`\n\n"
-                "Short prompts are auto-enhanced by AI for better results."
-            )
-            return
-        try:
-            from app.services.media_generation_service import get_media_service
-
-            model_key = str(flags.get("model") or self._default_image_model()).strip() or self._default_image_model()
-            media_service = get_media_service()
-            image_kwargs = self._image_generation_kwargs(media_service, model_key, flags)
-
-            should_auto_enhance = not self._flag_enabled(flags.get("no_enhance"))
-            if media_service.SUPPORTED_MODELS.get(model_key, {}).get("local_safetensors"):
-                should_auto_enhance = self._flag_enabled(flags.get("enhance"))
-            if should_auto_enhance:
-                prompt = await self._prepare_media_prompt(prompt, "image", user_id)
-
-            status_msg = await message.reply_text(
-                self._media_status_text(
-                    media_type="image",
-                    prompt=prompt,
-                    model_key=model_key,
-                    media_service=media_service,
-                    extra="This runs in the background. You can keep chatting while it renders.",
-                )
-            )
-            if not self._can_start_media_job(chat_id):
-                await status_msg.edit_text(
-                    "⏳ A media job is already running in this chat.\n\n"
-                    "You can keep chatting, but wait for the current image/video to finish before starting another."
-                )
-                return
-
-            async def _job() -> None:
-                action_stop = asyncio.Event()
-                action_task = asyncio.create_task(
-                    self._media_action_pulse(chat_id, ChatAction.UPLOAD_PHOTO, action_stop)
-                )
-                try:
-                    result = await asyncio.to_thread(
-                        media_service.generate_image,
-                        prompt=prompt, user_id=user_id, model_key=model_key,
-                        **image_kwargs,
-                    )
-                    if result.get("status") == "success":
-                        image_path = result["image_path"]
-                        total_time = result["generation_time_ms"] / 1000
-                        load_time = result.get("load_time_ms", 0) / 1000
-                        infer_time = result.get("inference_time_ms", 0) / 1000
-                        save_time = result.get("save_time_ms", 0) / 1000
-                        upload_started = time.perf_counter()
-                        with open(image_path, "rb") as img_file:
-                            await message.reply_photo(
-                                photo=img_file,
-                                caption=(
-                                    f"🎨 **Image Generated!**\n\n**Prompt:** {prompt[:300]}\n"
-                                    f"**Model:** {result['model']}\n"
-                                    f"**Total:** {total_time:.1f}s  |  load {load_time:.1f}s  |  infer {infer_time:.1f}s  |  save {save_time:.1f}s\n"
-                                    f"**Size:** {result['file_size'] / 1024:.1f} KB"
-                                ),
-                            )
-                        logger.info(
-                            "[MEDIA-TELEMETRY] type=image model=%s total_ms=%s load_ms=%s inference_ms=%s save_ms=%s upload_ms=%d",
-                            result.get("model", model_key),
-                            result.get("generation_time_ms"),
-                            result.get("load_time_ms"),
-                            result.get("inference_time_ms"),
-                            result.get("save_time_ms"),
-                            int((time.perf_counter() - upload_started) * 1000),
-                        )
-                        await status_msg.delete()
-                    else:
-                        error_msg = result.get("error", "Unknown error")
-                        await status_msg.edit_text(
-                            f"❌ **Image Generation Failed**\n\n**Error:** {error_msg}\n\nPlease try again."
-                        )
-                except Exception as exc:  # noqa: BLE001
-                    logger.error("Image generation error: %s", exc, exc_info=True)
-                    with suppress(Exception):
-                        await status_msg.edit_text(f"❌ **Image Generation Error**\n\n{exc}")
-                finally:
-                    action_stop.set()
-                    with suppress(Exception):
-                        await asyncio.wait_for(action_task, timeout=0.2)
-                    if not action_task.done():
-                        action_task.cancel()
-
-            task = asyncio.create_task(_job())
-            self._track_media_job(chat_id, task)
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Image generation error: %s", exc, exc_info=True)
-            await message.reply_text(f"❌ **Image Generation Error**\n\n{exc}")
-
-    async def _on_generate_video_command(
-        self, update: Update, context: ContextTypes.DEFAULT_TYPE
-    ) -> None:
-        if not update.effective_user or not update.message:
-            return
-        message = update.message
-        chat_id = message.chat_id
-        user_id = self._ensure_user(update.effective_user)
-        raw_args = list(getattr(context, "args", []) or [])
-        prompt, flags = self._parse_media_flags(raw_args)
-        if not prompt:
-            await message.reply_text(
-                "🎬 **AI Video Generation**\n\nGenerate short videos using local AI models!\n\n"
-                "**Usage:**\n`/generate_video a cat playing piano in a jazz club`\n\n"
-                "**Options:**\n"
-                "`--model <name>` — wan-t2v (default) or ltx2\n"
-                "`--epoch <1-10>` — Epoch checkpoint (wan-t2v only, default: 10)\n"
-                "`--frames <n>` — Number of frames (default: 33)\n"
-                "`--fps <n>` — Frames per second (default: 16)\n\n"
-                "**Examples:**\n"
-                "• `/generate_video ocean waves crashing on rocks at sunset`\n"
-                "• `/generate_video dancing flames --epoch 8 --frames 49`\n\n"
-                "Video generation takes 2-5 minutes. Short prompts are auto-enhanced."
-            )
-            return
-        try:
-            from app.services.media_generation_service import get_media_service
-
-            model_key = flags.get("model", "wan-t2v")
-            epoch = int(flags.get("epoch", 10)) if model_key == "wan-t2v" else None
-            num_frames = int(flags.get("frames", 33))
-            fps = int(flags.get("fps", 16))
-            media_service = get_media_service()
-
-            prompt = await self._prepare_media_prompt(prompt, "video", user_id)
-
-            status_msg = await message.reply_text(
-                self._media_status_text(
-                    media_type="video",
-                    prompt=prompt,
-                    model_key=model_key,
-                    media_service=media_service,
-                    extra=(
-                        f"**Frames:** {num_frames} @ {fps}fps"
-                        + (f"\n**Epoch:** {epoch}" if epoch else "")
-                    ),
-                )
-            )
-            if not self._can_start_media_job(chat_id):
-                await status_msg.edit_text(
-                    "⏳ A media job is already running in this chat.\n\n"
-                    "You can keep chatting, but wait for the current image/video to finish before starting another."
-                )
-                return
-
-            async def _job() -> None:
-                action_stop = asyncio.Event()
-                action_task = asyncio.create_task(
-                    self._media_action_pulse(chat_id, ChatAction.UPLOAD_VIDEO, action_stop)
-                )
-                try:
-                    result = await asyncio.to_thread(
-                        media_service.generate_video,
-                        prompt=prompt, user_id=user_id, model_key=model_key,
-                        num_frames=num_frames, fps=fps, epoch=epoch,
-                        width=480, height=320, num_inference_steps=30, guidance_scale=7.5,
-                    )
-                    if result.get("status") == "success":
-                        video_path = result["video_path"]
-                        gen_time = result["generation_time_ms"] / 1000
-                        upload_started = time.perf_counter()
-                        try:
-                            with open(video_path, "rb") as vid_file:
-                                await message.reply_video(
-                                    video=vid_file,
-                                    caption=(
-                                        f"🎬 **Video Generated!**\n\n**Prompt:** {prompt[:200]}\n"
-                                        f"**Model:** {result['model']}\n**Time:** {gen_time:.1f}s\n"
-                                        f"**Frames:** {result.get('num_frames', num_frames)} @ {result.get('fps', fps)}fps"
-                                    ),
-                                )
-                        except Exception:  # noqa: BLE001
-                            # Fallback: send as document if video upload fails
-                            with open(video_path, "rb") as vid_file:
-                                await message.reply_document(
-                                    document=vid_file,
-                                    caption=f"🎬 Video generated in {gen_time:.1f}s",
-                                )
-                        logger.info(
-                            "[MEDIA-TELEMETRY] type=video model=%s total_ms=%s upload_ms=%d",
-                            result.get("model", model_key),
-                            result.get("generation_time_ms"),
-                            int((time.perf_counter() - upload_started) * 1000),
-                        )
-                        await status_msg.delete()
-                    else:
-                        error_msg = result.get("error", "Unknown error")
-                        await status_msg.edit_text(
-                            f"❌ **Video Generation Failed**\n\n**Error:** {error_msg}\n\nPlease try again."
-                        )
-                except Exception as exc:  # noqa: BLE001
-                    logger.error("Video generation error: %s", exc, exc_info=True)
-                    with suppress(Exception):
-                        await status_msg.edit_text(f"❌ **Video Generation Error**\n\n{exc}")
-                finally:
-                    action_stop.set()
-                    with suppress(Exception):
-                        await asyncio.wait_for(action_task, timeout=0.2)
-                    if not action_task.done():
-                        action_task.cancel()
-
-            task = asyncio.create_task(_job())
-            self._track_media_job(chat_id, task)
-        except Exception as exc:  # noqa: BLE001
-            logger.error("Video generation error: %s", exc, exc_info=True)
-            await message.reply_text(f"❌ **Video Generation Error**\n\n{exc}")
-
-    # -- /reminders (rich version) ---------------------------------------------
-
     async def _on_reminders_command(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
     ) -> None:
@@ -5722,8 +4788,6 @@ class TelegramAdapter:
         "cmd_mymodel": "/mymodel",
         "cmd_reminders": "/reminders",
         "cmd_cancelreminders": "/cancelreminders",
-        "cmd_generate_image": "/generate_image",
-        "cmd_generate_video": "/generate_video",
         "cmd_export": "/export",
         "cmd_deleteuser": "/deleteuser",
         "cmd_start": "/start",
@@ -5785,8 +4849,6 @@ class TelegramAdapter:
             "/mymodel": self._on_mymodel_command,
             "/reminders": self._on_reminders_command,
             "/cancelreminders": self._on_cancel_reminders_command,
-            "/generate_image": self._on_generate_image_command,
-            "/generate_video": self._on_generate_video_command,
             "/export": self._on_export_command,
             "/deleteuser": self._on_deleteuser_command,
             "/start": self._on_start_command,
@@ -6460,32 +5522,6 @@ class TelegramAdapter:
             await update.message.reply_text(f"Current server time: {now_text}")
             return
 
-        # -- Intercept: plaintext media generation requests --------------------
-        if enabled("plaintext_media_generation"):
-            media_intent = self._detect_media_intent(text_value)
-            if media_intent is not None:
-                media_type, media_prompt = media_intent
-                media_prompt, media_flags = self._parse_media_flags_from_text(media_prompt)
-                user_id = self._ensure_user(update.effective_user)
-                logger.info(
-                    "Plaintext media intent detected for user %s: type=%s model=%s prompt=%r",
-                    user_id,
-                    media_type,
-                    media_flags.get(
-                        "model",
-                        self._default_image_model() if media_type == "image" else "wan-t2v",
-                    ),
-                    media_prompt[:80],
-                )
-                await self._handle_plaintext_media(
-                    media_type=media_type,
-                    prompt=media_prompt,
-                    user_id=user_id,
-                    update=update,
-                    flags=media_flags,
-                )
-                return
-
         correlation_id = f"tg:{getattr(update, 'update_id', 'unknown')}"
         payload = {
             "user_id": str(update.effective_user.id),
@@ -6743,25 +5779,9 @@ class TelegramAdapter:
                 typing_task.cancel()
 
         send_start = time.perf_counter()
-        clean_text, media_action = self._extract_media_request_from_reply(result.text)
-        allow_media = True
-        if result.turn_plan is not None:
-            allow_media = bool(result.turn_plan.allow_media_action)
-        # Always send the text portion of the response, even when a media action is also present.
-        # The event-bus path (_on_send_reply) already does this correctly; mirror that behavior here.
+        clean_text = self._strip_media_tags(result.text)
         if clean_text:
             await self._send_long_message(chat_id, clean_text)
-        if media_action and allow_media and db_user_id not in (None, "", False):
-            try:
-                await self._launch_assistant_media_job(
-                    chat_id=int(chat_id),
-                    tg_user_id=tg_user_id,
-                    media_type=media_action["media_type"],
-                    prompt=media_action["prompt"],
-                    requested_model=media_action.get("model"),
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Failed to launch assistant media action: %s", exc)
         send_ms = round((time.perf_counter() - send_start) * 1000, 1)
         e2e_ms = round((time.perf_counter() - ingress_started) * 1000, 1)
         total_ms = result.total_ms if result.total_ms else e2e_ms
@@ -6799,7 +5819,7 @@ class TelegramAdapter:
                 stage="telegram.fast_path.reply_sent",
                 chat_id=chat_id,
                 has_text=bool(clean_text),
-                has_media=bool(media_action and allow_media),
+                has_media=False,
                 status="reply_sent",
             )
 
@@ -6853,12 +5873,8 @@ class TelegramAdapter:
             raw_user_id = payload.get("user_id")
             audit_id = payload.get("audit_id")
             resolved_audit_id = int(audit_id) if isinstance(audit_id, int) else None
-            clean_text = _remove_leaked_sentinels(str(text or ""))
-            clean_text, media_action = self._extract_media_request_from_reply(clean_text)
-            allow_media = True
-            turn_plan = payload.get("turn_plan")
-            if isinstance(turn_plan, dict):
-                allow_media = bool(turn_plan.get("allow_media_action", True))
+            clean_text = self._strip_media_tags(_remove_leaked_sentinels(str(text or "")))
+            _ = raw_user_id  # retained for parity with other reply paths
             if clean_text:
                 await self._send_long_message(chat_id, clean_text)
                 if resolved_audit_id is not None:
@@ -6868,27 +5884,5 @@ class TelegramAdapter:
                         chat_id=chat_id,
                         status="reply_sent",
                     )
-            if media_action and allow_media and raw_user_id not in (None, "", False):
-                try:
-                    await self._launch_assistant_media_job(
-                        chat_id=int(chat_id),
-                        tg_user_id=int(raw_user_id),
-                        media_type=media_action["media_type"],
-                        prompt=media_action["prompt"],
-                        requested_model=media_action.get("model"),
-                    )
-                    if resolved_audit_id is not None:
-                        append_turn_route(
-                            audit_id=resolved_audit_id,
-                            stage="telegram.send_reply.media_launched",
-                            media_type=media_action["media_type"],
-                        )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("Failed to launch assistant media action for chat %s: %s", chat_id, exc)
-            elif media_action and not allow_media and resolved_audit_id is not None:
-                append_turn_route(
-                    audit_id=resolved_audit_id,
-                    stage="telegram.send_reply.media_suppressed",
-                )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to send telegram message to chat %s: %s", chat_id, exc)
