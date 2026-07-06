@@ -12,6 +12,14 @@ class Settings(BaseSettings):
     # Telegram
     telegram_bot_token: str
 
+    # Roleplay/adventure Mini App (Telegram WebApp). Disabled by default; set a
+    # public HTTPS URL and enable to surface a "Play in App" button.
+    webapp_enabled: bool = False
+    webapp_url: str | None = None
+    webapp_host: str = "127.0.0.1"
+    webapp_port: int = 8130
+    webapp_initdata_max_age_seconds: int = 86400
+
     # Discord
     discord_bot_token: str | None = None
 

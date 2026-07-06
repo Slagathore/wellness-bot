@@ -20,7 +20,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (InlineKeyboardButton, InlineKeyboardMarkup, Update,
+                      WebAppInfo)
 from telegram.constants import ChatAction
 from telegram.ext import (Application, CallbackQueryHandler, CommandHandler,
                           ContextTypes, MessageHandler, filters)
@@ -38,6 +39,7 @@ from app.history_scope import history_scope_for_user, table_has_column
 from app.monitoring_latency import record_message_timing
 from app.orchestrator.context_builder import schedule_session_summary
 from app.orchestrator.persona_runtime import resolve_user_model
+from app.utils.prompt_safety import UNTRUSTED_FENCE, sanitize_untrusted_text
 from app.orchestrator.prompt_builder import (RESPONSE_COMPLETION_SENTINEL,
                                              SENTINEL_INSTRUCTION)
 from app.personality.modes import (PERSONALITY_MODES, is_custom_character,
@@ -128,23 +130,9 @@ _ADVENTURE_REPLY_LENGTH_PRESETS: dict[str, dict[str, Any]] = {
     },
 }
 
-# Marker used to fence untrusted (player/LLM-authored) text inside a system
-# prompt so the model can tell narrative data from operator instructions.
-_UNTRUSTED_FENCE = "==="
-
-
-def _sanitize_untrusted_text(text: str | None, *, limit: int = 4000) -> str:
-    """Neutralize player/LLM-authored text before it enters a system prompt.
-
-    Strips the completion sentinel (so a planted copy can't fake completion or
-    suppress the sentinel-append safeguard) and the fence marker (so the text
-    can't close its delimited block early). This deliberately does NOT filter
-    narrative content — retcons still change canon; it only stops the text from
-    breaking out of its fence or hijacking the completion protocol.
-    """
-    cleaned = (text or "").replace(RESPONSE_COMPLETION_SENTINEL, "")
-    cleaned = cleaned.replace(_UNTRUSTED_FENCE, "-")
-    return cleaned.strip()[:limit]
+# Shared prompt-safety helpers (also used by the Mini App service).
+_UNTRUSTED_FENCE = UNTRUSTED_FENCE
+_sanitize_untrusted_text = sanitize_untrusted_text
 
 
 _ADVENTURE_DEFAULT_SETTINGS: dict[str, Any] = {
@@ -920,7 +908,17 @@ class TelegramAdapter:
         return InlineKeyboardMarkup(buttons)
 
     def _build_adventure_hub_keyboard(self, *, active_adventure: int | None) -> InlineKeyboardMarkup:
-        rows = [
+        rows: list[list[InlineKeyboardButton]] = []
+        # Surface the richer Mini App experience when it's configured.
+        cfg = settings()
+        if getattr(cfg, "webapp_enabled", False) and getattr(cfg, "webapp_url", None):
+            rows.append([
+                InlineKeyboardButton(
+                    "🎮 Play in App",
+                    web_app=WebAppInfo(url=str(cfg.webapp_url)),
+                )
+            ])
+        rows += [
             [InlineKeyboardButton("New Adventure", callback_data="advhub:new")],
             [InlineKeyboardButton("Quick Create Adventure", callback_data="advhub:quick")],
             [InlineKeyboardButton("Adventure List", callback_data="advhub:list")],
