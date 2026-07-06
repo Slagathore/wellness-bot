@@ -80,6 +80,12 @@ async def refresh_adventure_lore(
             return False
         settings = _load_settings(adv["settings"])
         last_id = int(settings.get("last_lore_message_id") or 0)
+        chars = conn.execute(
+            "SELECT c.display_name, c.emoji, ac.role "
+            "FROM adventure_characters ac JOIN custom_characters c ON c.id = ac.character_id "
+            "WHERE ac.adventure_id = ?",
+            (adventure_id,),
+        ).fetchall()
         new_msgs: List[Any] = conn.execute(
             "SELECT id, role, content FROM adventure_messages "
             "WHERE adventure_id = ? AND id > ? ORDER BY id ASC LIMIT ?",
@@ -95,6 +101,13 @@ async def refresh_adventure_lore(
         for m in new_msgs
     )
     title = sanitize_untrusted_text(adv["title"], limit=120)
+    char_lines = "\n".join(
+        f"- {(c['emoji'] or '🎭')} {sanitize_untrusted_text(c['display_name'], limit=80)} ({c['role']})"
+        for c in chars
+    ) or "- None recorded yet"
+    player_role = sanitize_untrusted_text(
+        str(settings.get("player_role") or ""), limit=300
+    ) or "Not specified yet."
 
     lore_text = ""
     try:
@@ -105,7 +118,9 @@ async def refresh_adventure_lore(
                     "role": "user",
                     "content": (
                         f"Adventure: {title}\n"
-                        f"Refresh reason: {reason}\n\n"
+                        f"Refresh reason: {reason}\n"
+                        f"Player identity: {player_role}\n"
+                        f"Known characters:\n{char_lines}\n\n"
                         f"Current lore:\n{current_lore}\n\n"
                         f"New canonical material to fold in:\n{message_lines}"
                     ),

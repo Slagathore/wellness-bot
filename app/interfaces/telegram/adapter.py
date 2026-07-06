@@ -31,6 +31,7 @@ from app.core.container import container
 from app.core.events import event_bus
 from app.db import db_ro, db_rw
 from app.domain import events
+from app.domain.adventure.lore import refresh_adventure_lore
 from app.domain.conversation.service import UserMessage
 from app.domain.safety.resources import CRISIS_RESOURCE_MESSAGE
 from app.domain.turns.audit import append_turn_route, build_route_entry, create_turn_audit
@@ -1342,107 +1343,21 @@ class TelegramAdapter:
     async def _refresh_adventure_lore(
         self, *, user_id: int, adventure_id: int, reason: str
     ) -> None:
-        with db_ro() as conn:
-            adventure = conn.execute(
-                "SELECT * FROM adventures WHERE id = ?",
-                (adventure_id,),
-            ).fetchone()
-        if not adventure:
-            return
-
-        settings_payload = self._load_adventure_settings(
-            adventure["settings"] if table_has_column("adventures", "settings") else None
-        )
-        last_lore_message_id = int(settings_payload.get("last_lore_message_id") or 0)
-
-        with db_ro() as conn:
-            chars = conn.execute(
-                "SELECT c.display_name, c.emoji, ac.role "
-                "FROM adventure_characters ac "
-                "JOIN custom_characters c ON c.id = ac.character_id "
-                "WHERE ac.adventure_id = ?",
-                (adventure_id,),
-            ).fetchall()
-            recent_msgs = conn.execute(
-                "SELECT id, role, content FROM adventure_messages "
-                "WHERE adventure_id = ? AND id > ? ORDER BY id ASC LIMIT 18",
-                (adventure_id, last_lore_message_id),
-            ).fetchall()
-        if not recent_msgs:
-            return
-
-        char_lines = "\n".join(
-            f"- {c['emoji']} {c['display_name']} ({c['role']})" for c in chars
-        ) or "- None recorded yet"
-        message_lines = "\n".join(
-            f"{msg['role'].upper()}: {str(msg['content'] or '').strip()[:500]}"
-            for msg in recent_msgs
-        )
-        current_lore = str(adventure["lore"] or "").strip() or "No lore has been consolidated yet."
-        player_role = settings_payload.get("player_role") or "Not specified yet."
+        # Delegates to the shared canon-sheet refresh so Telegram and the Mini
+        # App share one adventure-memory implementation.
+        async def _chat(messages, options=None):
+            text, _raw = await self._call_direct_llm(
+                user_id=user_id,
+                messages=messages,
+                path="adventure_lore",
+                options=options,
+            )
+            return {"text": text}
 
         try:
-            lore_text, _raw = await self._call_direct_llm(
-                user_id=user_id,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You maintain the canon sheet for an interactive text adventure. "
-                            "Update the lore so important characters, decisions, locations, factions, "
-                            "retcons, and unresolved threads persist across long sessions. "
-                            "Fold canon-changing RETCON or OOC directives into the lore as if they were "
-                            "always true. Ignore purely social OOC chatter that does not alter canon. "
-                            "Write plain text only. Keep these sections exactly: PLAYER IDENTITY, SETTING, "
-                            "CURRENT OBJECTIVE, IMPORTANT PEOPLE / FACTIONS, ESTABLISHED FACTS, "
-                            "RECENT CANON CHANGES, OPEN THREADS."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Adventure: {adventure['title']}\n"
-                            f"Refresh reason: {reason}\n"
-                            f"Player identity: {player_role}\n"
-                            f"Known characters:\n{char_lines}\n\n"
-                            f"Current lore:\n{current_lore}\n\n"
-                            f"New canonical material to fold in:\n{message_lines}"
-                        ),
-                    },
-                ],
-                path="adventure_lore",
-                options={"temperature": 0.2, "num_predict": 700},
-            )
+            await refresh_adventure_lore(adventure_id, chat_fn=_chat, reason=reason)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Adventure lore refresh failed for %s: %s", adventure_id, exc)
-            lore_text = ""
-
-        if not lore_text.strip():
-            lore_text = (
-                f"{current_lore}\n\n"
-                "RECENT CANON CHANGES:\n"
-                + "\n".join(
-                    f"- {msg['role']}: {str(msg['content'] or '').strip()[:220]}"
-                    for msg in recent_msgs[-6:]
-                )
-            ).strip()
-
-        settings_payload["last_lore_message_id"] = int(recent_msgs[-1]["id"])
-        with db_rw() as conn:
-            if table_has_column("adventures", "settings"):
-                conn.execute(
-                    "UPDATE adventures SET lore = ?, settings = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (
-                        lore_text.strip(),
-                        self._serialize_adventure_settings(settings_payload),
-                        adventure_id,
-                    ),
-                )
-            else:
-                conn.execute(
-                    "UPDATE adventures SET lore = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (lore_text.strip(), adventure_id),
-                )
 
     async def _build_adventure_choices(
         self,
