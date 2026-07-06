@@ -27,12 +27,16 @@ def _auth_header(telegram_user_id: int) -> dict:
 
 
 @pytest.fixture
-def client(test_config):
-    from app.interfaces.webapp.server import app
+def client(test_config, monkeypatch):
+    from app.interfaces.webapp import server
 
+    # server.py binds `from app.config import settings` at import, so patch the
+    # server module's reference too (or auth verifies against the real bot
+    # token, not the test token, when run after other tests).
+    monkeypatch.setattr(server, "settings", lambda: test_config)
     # initData freshness would reject auth_date=1e6; disable age check for tests.
     test_config.webapp_initdata_max_age_seconds = 0
-    return TestClient(app)
+    return TestClient(server.app)
 
 
 def _make_adventure(user_id: int, title="Test Quest", lore="A dark wood.") -> int:
