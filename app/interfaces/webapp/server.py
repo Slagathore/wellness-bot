@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -64,6 +64,23 @@ class CreateAdventureRequest(BaseModel):
     title: str
     premise: str = ""
     player_role: str = ""
+    character_ids: list[int] = []
+
+
+class CreateCharacterRequest(BaseModel):
+    name: str = ""
+    description: str = ""
+
+
+class AttachCharacterRequest(BaseModel):
+    character_id: int
+    role: str = "npc"
+
+
+class MemoryUpdateRequest(BaseModel):
+    lore: Optional[str] = None
+    player_role: Optional[str] = None
+    objective: Optional[str] = None
 
 
 @app.get("/healthz")
@@ -89,6 +106,82 @@ async def api_characters(user_id: int = Depends(current_user_id)) -> Dict[str, A
     return {"characters": service.list_characters(user_id)}
 
 
+@app.post("/api/characters", response_class=JSONResponse)
+async def api_create_character(
+    payload: CreateCharacterRequest, user_id: int = Depends(current_user_id)
+) -> Dict[str, Any]:
+    try:
+        return await service.create_character(
+            user_id, name=payload.name, description=payload.description
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/adventures/{adventure_id}/characters", response_class=JSONResponse)
+async def api_adventure_characters(
+    adventure_id: int, user_id: int = Depends(current_user_id)
+) -> Dict[str, Any]:
+    try:
+        return {"characters": service.list_adventure_characters(user_id, adventure_id)}
+    except AdventureNotFound:
+        raise HTTPException(status_code=404, detail="adventure not found")
+
+
+@app.post("/api/adventures/{adventure_id}/characters", response_class=JSONResponse)
+async def api_attach_character(
+    adventure_id: int,
+    payload: AttachCharacterRequest,
+    user_id: int = Depends(current_user_id),
+) -> Dict[str, Any]:
+    try:
+        return service.attach_character(
+            user_id, adventure_id, payload.character_id, payload.role
+        )
+    except AdventureNotFound:
+        raise HTTPException(status_code=404, detail="adventure not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.delete("/api/adventures/{adventure_id}/characters/{character_id}", response_class=JSONResponse)
+async def api_detach_character(
+    adventure_id: int, character_id: int, user_id: int = Depends(current_user_id)
+) -> Dict[str, Any]:
+    try:
+        return service.detach_character(user_id, adventure_id, character_id)
+    except AdventureNotFound:
+        raise HTTPException(status_code=404, detail="adventure not found")
+
+
+@app.get("/api/adventures/{adventure_id}/memory", response_class=JSONResponse)
+async def api_get_memory(
+    adventure_id: int, user_id: int = Depends(current_user_id)
+) -> Dict[str, Any]:
+    try:
+        return service.get_memory(user_id, adventure_id)
+    except AdventureNotFound:
+        raise HTTPException(status_code=404, detail="adventure not found")
+
+
+@app.put("/api/adventures/{adventure_id}/memory", response_class=JSONResponse)
+async def api_update_memory(
+    adventure_id: int,
+    payload: MemoryUpdateRequest,
+    user_id: int = Depends(current_user_id),
+) -> Dict[str, Any]:
+    try:
+        return service.update_memory(
+            user_id,
+            adventure_id,
+            lore=payload.lore,
+            player_role=payload.player_role,
+            objective=payload.objective,
+        )
+    except AdventureNotFound:
+        raise HTTPException(status_code=404, detail="adventure not found")
+
+
 @app.get("/api/adventures", response_class=JSONResponse)
 async def api_adventures(
     offset: int = 0, limit: int = 20, user_id: int = Depends(current_user_id)
@@ -107,6 +200,7 @@ async def api_create_adventure(
         title=payload.title,
         premise=payload.premise,
         player_role=payload.player_role,
+        character_ids=payload.character_ids,
     )
 
 

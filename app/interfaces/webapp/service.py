@@ -14,10 +14,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from app.db import db_ro, db_rw
-from app.domain.adventure.lore import (lore_refresh_due,
+from app.domain.adventure.lore import (_load_settings, lore_refresh_due,
                                        refresh_adventure_lore)
 from app.utils.ollama import chat_async
 from app.utils.prompt_safety import sanitize_untrusted_text
@@ -140,6 +141,169 @@ class WebappService:
             for r in reversed(rows)
         ]
 
+    # -- characters --------------------------------------------------------
+    _CHAR_BLOCK_RE = re.compile(r"\[CHARACTER\](.*?)\[/CHARACTER\]", re.DOTALL | re.IGNORECASE)
+    _VALID_ROLES = ("npc", "protagonist", "antagonist", "companion")
+    _CHAR_SYSTEM = (
+        "You are a character creation assistant for a roleplay adventure. From the "
+        "user's brief, output EXACTLY one [CHARACTER] block and nothing else — no "
+        "reasoning, no commentary. Use this format:\n"
+        "[CHARACTER]\n"
+        "Name: (character name)\n"
+        "Emoji: (a single emoji)\n"
+        "Greeting: (the character's first line, in character)\n"
+        "Temperature: (a number 0.7-1.4)\n"
+        "System Prompt: (150-400 words of instructions for playing this character: "
+        "personality, appearance, mannerisms, speech patterns, scenario context)\n"
+        "[/CHARACTER]"
+    )
+
+    @classmethod
+    def _parse_character_block(cls, text: str) -> Dict[str, Any]:
+        match = cls._CHAR_BLOCK_RE.search(text or "")
+        block = match.group(1) if match else (text or "")
+        key_map = {"name": "name", "emoji": "emoji", "greeting": "greeting",
+                   "temperature": "temperature", "system prompt": "system_prompt"}
+        result: Dict[str, Any] = {}
+        cur: Optional[str] = None
+        buf: List[str] = []
+        for line in block.splitlines():
+            hit = False
+            low = line.lower().strip()
+            for prefix, key in key_map.items():
+                if low.startswith(prefix + ":"):
+                    if cur:
+                        result[cur] = "\n".join(buf).strip()
+                    cur, buf, hit = key, [line.split(":", 1)[1].strip()], True
+                    break
+            if not hit and cur:
+                buf.append(line)
+        if cur:
+            result[cur] = "\n".join(buf).strip()
+        return result
+
+    def _character_accessible(self, conn, db_user_id: int, character_id: int):
+        return conn.execute(
+            "SELECT id, display_name, emoji FROM custom_characters "
+            "WHERE id = ? AND (is_global = 1 OR creator_user_id = ?)",
+            (character_id, db_user_id),
+        ).fetchone()
+
+    async def create_character(
+        self, db_user_id: int, *, name: str = "", description: str = ""
+    ) -> Dict[str, Any]:
+        name = sanitize_untrusted_text(name, limit=60).strip()
+        description = sanitize_untrusted_text(description, limit=1500).strip()
+        if not name and not description:
+            raise ValueError("name or description required")
+
+        response = await chat_async(
+            messages=[
+                {"role": "system", "content": self._CHAR_SYSTEM},
+                {"role": "user", "content": f"Name: {name or '(you choose one)'}\nDescription: {description or '(invent something evocative)'}"},
+            ],
+            model=self._resolve_model(db_user_id),
+            options={"temperature": 0.9, "num_predict": 1500},
+        )
+        raw = str(response.get("text") or "") if isinstance(response, dict) else ""
+        parsed = self._parse_character_block(raw)
+
+        final_name = (parsed.get("name") or name or "New Character").strip()[:60]
+        emoji = (str(parsed.get("emoji") or "").strip() or "🎭")[:8]
+        system_prompt = sanitize_untrusted_text(
+            parsed.get("system_prompt") or description or final_name, limit=6000
+        )
+        greeting = sanitize_untrusted_text(parsed.get("greeting") or "", limit=1000)
+        try:
+            temperature = max(0.1, min(2.0, float(parsed.get("temperature") or 0.85)))
+        except (TypeError, ValueError):
+            temperature = 0.85
+        slug = re.sub(r"[^a-z0-9]+", "_", final_name.lower()).strip("_") or "character"
+
+        with db_rw() as conn:
+            conn.execute(
+                "INSERT INTO custom_characters(name, display_name, emoji, system_prompt, "
+                "temperature, initial_message, creator_user_id, is_global) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
+                (slug, final_name, emoji, system_prompt, temperature, greeting, db_user_id),
+            )
+            cid = int(conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
+        return {"id": cid, "display_name": final_name, "emoji": emoji}
+
+    def list_adventure_characters(self, db_user_id: int, adventure_id: int) -> List[Dict[str, Any]]:
+        with db_ro() as conn:
+            self._owned_adventure(conn, db_user_id, adventure_id)
+            rows = conn.execute(
+                "SELECT c.id, c.display_name, c.emoji, ac.role FROM adventure_characters ac "
+                "JOIN custom_characters c ON c.id = ac.character_id "
+                "WHERE ac.adventure_id = ? ORDER BY c.display_name",
+                (adventure_id,),
+            ).fetchall()
+        return [
+            {"id": r["id"], "display_name": r["display_name"], "emoji": r["emoji"] or "🎭", "role": r["role"]}
+            for r in rows
+        ]
+
+    def attach_character(
+        self, db_user_id: int, adventure_id: int, character_id: int, role: str = "npc"
+    ) -> Dict[str, Any]:
+        role = role if role in self._VALID_ROLES else "npc"
+        with db_rw() as conn:
+            self._owned_adventure(conn, db_user_id, adventure_id)
+            if not self._character_accessible(conn, db_user_id, character_id):
+                raise ValueError("character not accessible")
+            conn.execute(
+                "INSERT OR REPLACE INTO adventure_characters(adventure_id, character_id, role) "
+                "VALUES (?, ?, ?)",
+                (adventure_id, character_id, role),
+            )
+        return {"ok": True}
+
+    def detach_character(
+        self, db_user_id: int, adventure_id: int, character_id: int
+    ) -> Dict[str, Any]:
+        with db_rw() as conn:
+            self._owned_adventure(conn, db_user_id, adventure_id)
+            conn.execute(
+                "DELETE FROM adventure_characters WHERE adventure_id = ? AND character_id = ?",
+                (adventure_id, character_id),
+            )
+        return {"ok": True}
+
+    # -- memory (canon sheet) ----------------------------------------------
+    def get_memory(self, db_user_id: int, adventure_id: int) -> Dict[str, Any]:
+        with db_ro() as conn:
+            adv = self._owned_adventure(conn, db_user_id, adventure_id)
+        settings = _load_settings(adv["settings"])
+        return {
+            "lore": adv["lore"] or "",
+            "player_role": settings.get("player_role") or "",
+            "objective": settings.get("objective") or "",
+        }
+
+    def update_memory(
+        self,
+        db_user_id: int,
+        adventure_id: int,
+        *,
+        lore: Optional[str] = None,
+        player_role: Optional[str] = None,
+        objective: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        with db_rw() as conn:
+            adv = self._owned_adventure(conn, db_user_id, adventure_id)
+            settings = _load_settings(adv["settings"])
+            if player_role is not None:
+                settings["player_role"] = sanitize_untrusted_text(player_role, limit=300)
+            if objective is not None:
+                settings["objective"] = sanitize_untrusted_text(objective, limit=300)
+            new_lore = adv["lore"] if lore is None else sanitize_untrusted_text(lore, limit=8000)
+            conn.execute(
+                "UPDATE adventures SET lore = ?, settings = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (new_lore, json.dumps(settings), adventure_id),
+            )
+        return self.get_memory(db_user_id, adventure_id)
+
     # -- creation ----------------------------------------------------------
     async def create_adventure(
         self,
@@ -148,6 +312,7 @@ class WebappService:
         title: str,
         premise: str = "",
         player_role: str = "",
+        character_ids: Optional[List[int]] = None,
     ) -> Dict[str, Any]:
         """Create a new adventure from a premise and generate its opening scene."""
         title = sanitize_untrusted_text(title, limit=80).strip() or "Untitled Adventure"
@@ -174,12 +339,23 @@ class WebappService:
                 conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
             )
 
-        opening = await self._opening_scene(db_user_id, title, premise, player_role)
+        # Attach any starring characters the player picked (accessible ones only).
+        char_names: List[str] = []
+        for cid in (character_ids or []):
+            try:
+                self.attach_character(db_user_id, adventure_id, int(cid), "companion")
+            except (ValueError, TypeError, AdventureNotFound):
+                continue
+        for c in self.list_adventure_characters(db_user_id, adventure_id):
+            char_names.append(f"{c['emoji']} {c['display_name']}")
+
+        opening = await self._opening_scene(db_user_id, title, premise, player_role, char_names)
         self._insert_message(adventure_id, "narrator", opening)
         return {"id": adventure_id, "title": title, "opening": opening}
 
     async def _opening_scene(
-        self, db_user_id: int, title: str, premise: str, player_role: str
+        self, db_user_id: int, title: str, premise: str, player_role: str,
+        char_names: Optional[List[str]] = None,
     ) -> str:
         system = (
             "You are a creative roleplay narrator opening a brand-new interactive "
@@ -188,11 +364,13 @@ class WebappService:
             "an immediate hook, then end at a moment that invites the player's first "
             "action. Do not explain or summarize; begin the story directly."
         )
+        cast = ", ".join(char_names) if char_names else ""
         user = (
             f"Adventure title: {title}\n"
             f"Premise: {premise or '(none given; invent something evocative)'}\n"
-            f"The player is: {player_role or 'an unnamed protagonist'}\n\n"
-            "Opening scene:"
+            f"The player is: {player_role or 'an unnamed protagonist'}\n"
+            + (f"Feature these characters: {sanitize_untrusted_text(cast, limit=300)}\n" if cast else "")
+            + "\nOpening scene:"
         )
         response = await chat_async(
             messages=[

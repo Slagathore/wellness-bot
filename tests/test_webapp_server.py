@@ -210,6 +210,104 @@ def test_create_adventure_requires_title_or_premise(client, test_user, mock_narr
     assert resp.status_code == 400
 
 
+CHAR_BLOCK = (
+    "[CHARACTER]\n"
+    "Name: Seraphina\n"
+    "Emoji: 🗡️\n"
+    "Greeting: Well met, traveller.\n"
+    "Temperature: 1.1\n"
+    "System Prompt: You are Seraphina, a sardonic sellsword with a soft heart.\n"
+    "[/CHARACTER]"
+)
+
+
+@pytest.fixture
+def mock_char(monkeypatch):
+    import app.interfaces.webapp.service as svc
+
+    async def fake_chat_async(messages, model=None, options=None):
+        return {"text": CHAR_BLOCK, "raw": {}}
+
+    monkeypatch.setattr(svc, "chat_async", fake_chat_async)
+    monkeypatch.setattr(svc.WebappService, "_schedule_lore_refresh", lambda self, aid: None)
+
+
+def test_create_character_and_list(client, test_user, mock_char):
+    _db_user_id, telegram_id = test_user
+    headers = _auth_header(telegram_id)
+    resp = client.post("/api/characters", headers=headers, json={"name": "Seraphina", "description": "a sellsword"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["display_name"] == "Seraphina" and body["emoji"] == "🗡️"
+
+    chars = client.get("/api/characters", headers=headers).json()["characters"]
+    assert any(c["id"] == body["id"] for c in chars)
+
+
+def test_attach_detach_character(client, test_user, mock_char):
+    db_user_id, telegram_id = test_user
+    headers = _auth_header(telegram_id)
+    adv_id = _make_adventure(db_user_id)
+    cid = client.post("/api/characters", headers=headers, json={"name": "Seraphina", "description": "x"}).json()["id"]
+
+    client.post(f"/api/adventures/{adv_id}/characters", headers=headers, json={"character_id": cid, "role": "companion"})
+    attached = client.get(f"/api/adventures/{adv_id}/characters", headers=headers).json()["characters"]
+    assert [c["id"] for c in attached] == [cid] and attached[0]["role"] == "companion"
+
+    client.delete(f"/api/adventures/{adv_id}/characters/{cid}", headers=headers)
+    assert client.get(f"/api/adventures/{adv_id}/characters", headers=headers).json()["characters"] == []
+
+
+def test_cannot_attach_other_users_character(client, test_user):
+    db_user_id, telegram_id = test_user
+    adv_id = _make_adventure(db_user_id)
+    # A character owned by someone else, not global.
+    with db_rw() as conn:
+        conn.execute(
+            "INSERT INTO users(telegram_user_id, telegram_username, display_name) "
+            "VALUES (424242, 'other', 'Other')"
+        )
+        other_uid = int(conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
+        conn.execute(
+            "INSERT INTO custom_characters(name, display_name, system_prompt, creator_user_id, is_global) "
+            "VALUES ('x','X','p', ?, 0)",
+            (other_uid,),
+        )
+        other_cid = int(conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
+    resp = client.post(
+        f"/api/adventures/{adv_id}/characters",
+        headers=_auth_header(telegram_id),
+        json={"character_id": other_cid},
+    )
+    assert resp.status_code == 400
+
+
+def test_create_adventure_with_characters(client, test_user, mock_char):
+    db_user_id, telegram_id = test_user
+    headers = _auth_header(telegram_id)
+    cid = client.post("/api/characters", headers=headers, json={"name": "Seraphina", "description": "x"}).json()["id"]
+    adv = client.post("/api/adventures", headers=headers, json={"title": "Quest", "premise": "p", "character_ids": [cid]}).json()
+    attached = client.get(f"/api/adventures/{adv['id']}/characters", headers=headers).json()["characters"]
+    assert [c["id"] for c in attached] == [cid]
+
+
+def test_memory_get_and_update(client, test_user, mock_char):
+    db_user_id, telegram_id = test_user
+    headers = _auth_header(telegram_id)
+    adv_id = _make_adventure(db_user_id, lore="Initial canon.")
+    mem = client.get(f"/api/adventures/{adv_id}/memory", headers=headers).json()
+    assert mem["lore"] == "Initial canon."
+
+    updated = client.put(
+        f"/api/adventures/{adv_id}/memory",
+        headers=headers,
+        json={"lore": "The king is dead.", "player_role": "the heir", "objective": "claim the throne"},
+    ).json()
+    assert updated["lore"] == "The king is dead."
+    assert updated["player_role"] == "the heir"
+    assert updated["objective"] == "claim the throne"
+
+
 def test_cannot_access_another_users_adventure(client, test_user):
     _db_user_id, telegram_id = test_user
     # Adventure owned by a different user id.
