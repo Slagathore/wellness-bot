@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -19,6 +19,7 @@ from app.config import settings
 from app.interfaces.webapp.auth import (InitDataError, parse_webapp_user,
                                         verify_init_data)
 from app.interfaces.webapp.service import AdventureNotFound, WebappService
+from app.services.dm_image import ImageUnavailable, image_health, is_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,11 @@ class MemoryUpdateRequest(BaseModel):
     objective: Optional[str] = None
 
 
+class ImageRequest(BaseModel):
+    subject: Optional[str] = None
+    style: Optional[str] = None
+
+
 @app.get("/healthz")
 async def healthz() -> Dict[str, str]:
     return {"status": "ok"}
@@ -99,6 +105,44 @@ async def index() -> HTMLResponse:
 @app.get("/api/me", response_class=JSONResponse)
 async def api_me(user_id: int = Depends(current_user_id)) -> Dict[str, Any]:
     return {"user_id": user_id}
+
+
+@app.get("/api/image/health", response_class=JSONResponse)
+async def api_image_health(user_id: int = Depends(current_user_id)) -> Dict[str, Any]:
+    """Whether image generation is available (server enabled + reachable)."""
+    return {"available": bool(is_enabled() and (await image_health()) is not None)}
+
+
+@app.post("/api/adventures/{adventure_id}/image")
+async def api_scene_image(
+    adventure_id: int,
+    payload: ImageRequest = ImageRequest(),
+    user_id: int = Depends(current_user_id),
+) -> Response:
+    style = payload.style or "scene"
+    subject = payload.subject
+    try:
+        png = await service.illustrate_scene(user_id, adventure_id, subject=subject, style=style)
+    except AdventureNotFound:
+        raise HTTPException(status_code=404, detail="adventure not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ImageUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return Response(content=png, media_type="image/png")
+
+
+@app.post("/api/characters/{character_id}/image")
+async def api_character_image(
+    character_id: int, user_id: int = Depends(current_user_id)
+) -> Response:
+    try:
+        png = await service.character_portrait(user_id, character_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ImageUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return Response(content=png, media_type="image/png")
 
 
 @app.get("/api/characters", response_class=JSONResponse)

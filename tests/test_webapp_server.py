@@ -308,6 +308,81 @@ def test_memory_get_and_update(client, test_user, mock_char):
     assert updated["objective"] == "claim the throne"
 
 
+@pytest.fixture
+def mock_images(monkeypatch):
+    import app.interfaces.webapp.server as srv
+    import app.interfaces.webapp.service as svc
+
+    async def fake_generate_image(subject, *, style=None, nsfw=False, seed=None):
+        return b"\x89PNG-" + style.encode() if style else b"\x89PNG"
+
+    async def fake_chat_async(messages, model=None, options=None):
+        return {"text": "a dark corridor, torchlight, cold stone, ominous mood", "raw": {}}
+
+    async def fake_health():
+        return {"ok": True}
+
+    monkeypatch.setattr(svc, "generate_image", fake_generate_image)
+    monkeypatch.setattr(svc, "chat_async", fake_chat_async)
+    monkeypatch.setattr(svc.WebappService, "_schedule_lore_refresh", lambda self, aid: None)
+    monkeypatch.setattr(srv, "is_enabled", lambda: True)
+    monkeypatch.setattr(srv, "image_health", fake_health)
+
+
+def test_image_health(client, test_user, mock_images):
+    _db_user_id, telegram_id = test_user
+    resp = client.get("/api/image/health", headers=_auth_header(telegram_id))
+    assert resp.json()["available"] is True
+
+
+def test_scene_image_returns_png(client, test_user, mock_images):
+    db_user_id, telegram_id = test_user
+    adv_id = _make_adventure(db_user_id)
+    with db_rw() as conn:
+        conn.execute(
+            "INSERT INTO adventure_messages(adventure_id, role, content) VALUES (?, 'narrator', ?)",
+            (adv_id, "You enter a dark corridor lit by guttering torches."),
+        )
+    resp = client.post(f"/api/adventures/{adv_id}/image", headers=_auth_header(telegram_id), json={})
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "image/png"
+    assert resp.content.startswith(b"\x89PNG")
+
+
+def test_scene_image_nothing_to_illustrate(client, test_user, mock_images):
+    db_user_id, telegram_id = test_user
+    adv_id = _make_adventure(db_user_id)  # no messages yet
+    resp = client.post(f"/api/adventures/{adv_id}/image", headers=_auth_header(telegram_id), json={})
+    assert resp.status_code == 400
+
+
+def test_scene_image_unavailable_returns_503(client, test_user, mock_images, monkeypatch):
+    import app.interfaces.webapp.service as svc
+    from app.services.dm_image import ImageUnavailable
+
+    async def boom(subject, *, style=None, nsfw=False, seed=None):
+        raise ImageUnavailable("server down")
+
+    monkeypatch.setattr(svc, "generate_image", boom)
+    db_user_id, telegram_id = test_user
+    adv_id = _make_adventure(db_user_id)
+    with db_rw() as conn:
+        conn.execute(
+            "INSERT INTO adventure_messages(adventure_id, role, content) VALUES (?, 'narrator', 'scene')",
+            (adv_id,),
+        )
+    resp = client.post(f"/api/adventures/{adv_id}/image", headers=_auth_header(telegram_id), json={})
+    assert resp.status_code == 503
+
+
+def test_character_portrait_png(client, test_user, mock_images, mock_char):
+    db_user_id, telegram_id = test_user
+    headers = _auth_header(telegram_id)
+    cid = client.post("/api/characters", headers=headers, json={"name": "Seraphina", "description": "x"}).json()["id"]
+    resp = client.post(f"/api/characters/{cid}/image", headers=headers)
+    assert resp.status_code == 200 and resp.headers["content-type"] == "image/png"
+
+
 def test_cannot_access_another_users_adventure(client, test_user):
     _db_user_id, telegram_id = test_user
     # Adventure owned by a different user id.

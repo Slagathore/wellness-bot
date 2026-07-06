@@ -62,6 +62,8 @@
     .story .action::before { content: "\203A  "; opacity: .6; font-style: normal; }
     .story .authored { color: var(--text); opacity: .92; }         /* player Story */
     .typing { color: var(--hint); font-style: italic; padding: 4px 2px 10px; }
+    .scene-img { display: block; max-width: 100%; border-radius: 12px; margin: 14px auto 8px; border: 1px solid var(--border); }
+    .portrait-img { display: block; max-width: 220px; border-radius: 10px; margin: 8px 2px 2px; border: 1px solid var(--border); }
 
     /* ---- Composer ---- */
     .dock { flex: 0 0 auto; border-top: 1px solid var(--border); background: var(--bg); padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); }
@@ -163,6 +165,7 @@
       <button id="btn-continue">↻ Continue</button>
       <button id="btn-retry">⟲ Retry</button>
       <button id="btn-erase">⌫ Erase</button>
+      <button id="btn-image" class="hidden">🎨 Image</button>
     </div>
     <div class="modes">
       <button data-mode="do" class="on">Do</button>
@@ -265,6 +268,32 @@
       titleEl.textContent = title;
       main.innerHTML = '<div class="empty">Loading…</div>';
       await loadStory();
+      // Show the image button only if the DM image server is reachable.
+      try {
+        const h = await api("/api/image/health");
+        state.imgOk = !!h.available;
+        $("btn-image").classList.toggle("hidden", !h.available);
+      } catch (e) { state.imgOk = false; $("btn-image").classList.add("hidden"); }
+    }
+
+    async function illustrate() {
+      if (state.busy) return;
+      state.busy = true; setBusy(true);
+      const body = $("story-body") || main.querySelector(".story");
+      const wait = document.createElement("p");
+      wait.className = "typing"; wait.id = "imgwait"; wait.textContent = "Painting the scene…";
+      if (body) { body.appendChild(wait); main.scrollTop = main.scrollHeight; }
+      try {
+        const res = await fetch(`/api/adventures/${state.id}/image`, { method: "POST", headers: H, body: "{}" });
+        if (!res.ok) throw new Error("image server " + res.status);
+        const url = URL.createObjectURL(await res.blob());
+        wait.remove();
+        const img = document.createElement("img");
+        img.className = "scene-img"; img.src = url;
+        if (body) { body.appendChild(img); main.scrollTop = main.scrollHeight; }
+      } catch (e) {
+        const w = $("imgwait"); if (w) w.textContent = "⚠️ " + e.message;
+      } finally { state.busy = false; setBusy(false); }
     }
 
     /* ---------- Create adventure ---------- */
@@ -358,13 +387,14 @@
       ]);
       const attachedIds = new Set(inAdv.characters.map(c => c.id));
       const available = (all.characters || []).filter(c => !attachedIds.has(c.id));
+      const pbtn = (c) => state.imgOk ? `<span class="x" data-portrait="${c.id}" title="Portrait">🖼</span>` : "";
       let h = '<label>In this adventure</label>';
       h += inAdv.characters.length
-        ? inAdv.characters.map(c => `<div class="row"><span class="grow">${esc(c.emoji)} ${esc(c.display_name)} <span class="muted">· ${esc(c.role)}</span></span><span class="x" data-detach="${c.id}">✕</span></div>`).join("")
+        ? inAdv.characters.map(c => `<div class="row"><span class="grow">${esc(c.emoji)} ${esc(c.display_name)} <span class="muted">· ${esc(c.role)}</span></span>${pbtn(c)}<span class="x" data-detach="${c.id}">✕</span></div>`).join("")
         : '<p class="muted">No characters in this story yet.</p>';
       if (available.length) {
         h += '<label>Add one of yours</label>';
-        h += available.map(c => `<div class="row"><span class="grow">${esc(c.emoji)} ${esc(c.display_name)}</span><span class="x" data-attach="${c.id}" style="color:var(--link);">＋ Add</span></div>`).join("");
+        h += available.map(c => `<div class="row"><span class="grow">${esc(c.emoji)} ${esc(c.display_name)}</span>${pbtn(c)}<span class="x" data-attach="${c.id}" style="color:var(--link);">＋ Add</span></div>`).join("");
       }
       h += '<div class="divider"></div><label>Create a new character</label>';
       h += `<input id="nc-name" placeholder="Name (optional)" />
@@ -377,6 +407,15 @@
       });
       sheetBody.querySelectorAll("[data-attach]").forEach(el => el.onclick = async () => {
         await api(`/api/adventures/${state.id}/characters`, { method: "POST", body: JSON.stringify({ character_id: +el.dataset.attach, role: "companion" }) }); renderChars();
+      });
+      sheetBody.querySelectorAll("[data-portrait]").forEach(el => el.onclick = async () => {
+        const row = el.closest(".row"); const prev = el.textContent; el.textContent = "…";
+        try {
+          const res = await fetch(`/api/characters/${el.dataset.portrait}/image`, { method: "POST", headers: H });
+          if (!res.ok) throw new Error(res.status);
+          const img = document.createElement("img"); img.className = "portrait-img"; img.src = URL.createObjectURL(await res.blob());
+          row.after(img); el.textContent = prev;
+        } catch (e) { el.textContent = "⚠️"; }
       });
       $("nc-go").onclick = async () => {
         const name = $("nc-name").value.trim(), description = $("nc-desc").value.trim();
@@ -407,7 +446,7 @@
     }
     function setBusy(b) {
       sendBtn.disabled = b;
-      ["btn-continue", "btn-retry", "btn-erase"].forEach(id => $(id).disabled = b);
+      ["btn-continue", "btn-retry", "btn-erase", "btn-image"].forEach(id => $(id).disabled = b);
     }
 
     async function sendTurn() {
@@ -429,6 +468,7 @@
     $("btn-continue").onclick = () => act(() => api(`/api/adventures/${state.id}/continue`, { method: "POST" }));
     $("btn-retry").onclick = () => act(() => api(`/api/adventures/${state.id}/retry`, { method: "POST" }));
     $("btn-erase").onclick = () => act(() => api(`/api/adventures/${state.id}/erase`, { method: "POST" }));
+    $("btn-image").onclick = illustrate;
     document.querySelectorAll(".modes button").forEach(b => b.onclick = () => {
       state.mode = b.dataset.mode;
       document.querySelectorAll(".modes button").forEach(x => x.classList.toggle("on", x === b));

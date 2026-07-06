@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional
 from app.db import db_ro, db_rw
 from app.domain.adventure.lore import (_load_settings, lore_refresh_due,
                                        refresh_adventure_lore)
+from app.services.dm_image import generate_image
 from app.utils.ollama import chat_async
 from app.utils.prompt_safety import sanitize_untrusted_text
 
@@ -303,6 +304,78 @@ class WebappService:
                 (new_lore, json.dumps(settings), adventure_id),
             )
         return self.get_memory(db_user_id, adventure_id)
+
+    # -- images ------------------------------------------------------------
+    def _nsfw_opt_in(self, db_user_id: int) -> bool:
+        try:
+            from app.runtime.services.preferences import PreferenceService
+
+            return bool(PreferenceService().get_nsfw_opt_in(db_user_id))
+        except Exception:  # noqa: BLE001
+            return False
+
+    async def _to_image_prompt(self, db_user_id: int, text: str) -> str:
+        """Distil narrative text into a concise, comma-separated image prompt.
+
+        The DM recipes expect a tight subject, not prose, so we summarize first;
+        on any failure we fall back to the raw (truncated) text.
+        """
+        text = (text or "").strip()
+        if not text:
+            return ""
+        try:
+            resp = await chat_async(
+                messages=[
+                    {"role": "system", "content": (
+                        "Convert the scene into an image-generation prompt: ONLY a "
+                        "comma-separated list of vivid visual details (subject, setting, "
+                        "lighting, mood, composition), under 60 words. No sentences, no "
+                        "reasoning, no quotes."
+                    )},
+                    {"role": "user", "content": sanitize_untrusted_text(text, limit=1500)},
+                ],
+                model=self._resolve_model(db_user_id),
+                options={"temperature": 0.4, "num_predict": 300},
+            )
+            raw = str(resp.get("text") or "").strip() if isinstance(resp, dict) else ""
+            lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+            prompt = sanitize_untrusted_text(lines[-1] if lines else "", limit=400)
+            return prompt or sanitize_untrusted_text(text, limit=400)
+        except Exception:  # noqa: BLE001
+            return sanitize_untrusted_text(text, limit=400)
+
+    async def illustrate_scene(
+        self, db_user_id: int, adventure_id: int, *, subject: Optional[str] = None, style: str = "scene"
+    ) -> bytes:
+        with db_ro() as conn:
+            self._owned_adventure(conn, db_user_id, adventure_id)
+            if not subject:
+                last = conn.execute(
+                    "SELECT content FROM adventure_messages WHERE adventure_id = ? "
+                    "AND role IN ('narrator', 'character') ORDER BY id DESC LIMIT 1",
+                    (adventure_id,),
+                ).fetchone()
+                subject = last["content"] if last else ""
+        prompt = await self._to_image_prompt(db_user_id, subject or "")
+        if not prompt:
+            raise ValueError("nothing to illustrate yet")
+        return await generate_image(prompt, style=style, nsfw=self._nsfw_opt_in(db_user_id))
+
+    async def character_portrait(
+        self, db_user_id: int, character_id: int, *, style: str = "portrait"
+    ) -> bytes:
+        with db_ro() as conn:
+            if not self._character_accessible(conn, db_user_id, character_id):
+                raise ValueError("character not accessible")
+            row = conn.execute(
+                "SELECT display_name, system_prompt FROM custom_characters WHERE id = ?",
+                (character_id,),
+            ).fetchone()
+        subject = f"character portrait of {row['display_name']}. {str(row['system_prompt'] or '')[:400]}"
+        prompt = await self._to_image_prompt(db_user_id, subject)
+        return await generate_image(
+            prompt or subject[:400], style=style, nsfw=self._nsfw_opt_in(db_user_id)
+        )
 
     # -- creation ----------------------------------------------------------
     async def create_adventure(
