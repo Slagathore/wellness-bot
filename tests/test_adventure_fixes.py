@@ -31,6 +31,23 @@ def test_is_placeholder_adventure_title(title, is_placeholder):
     assert TelegramAdapter._is_placeholder_adventure_title(title) is is_placeholder
 
 
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("The Darkness Behind Her Eyes", "The Darkness Behind Her Eyes"),
+        ("thinking...\nThe Goose in the Machine", "The Goose in the Machine"),
+        ('"Echoes of a Silicon Mind."', "Echoes of a Silicon Mind"),
+        ("Dark Obsessions of the", None),   # truncated (trailing stopword)
+        ("Darkness", None),                  # single word
+        ("a " * 40, None),                   # too long
+        ("", None),
+        (None, None),
+    ],
+)
+def test_clean_generated_title(raw, expected):
+    assert TelegramAdapter._clean_generated_title(raw) == expected
+
+
 def test_adventure_messages_role_constraint_rejects_assistant():
     """Documents why fromchat must map assistant -> narrator.
 

@@ -3209,6 +3209,31 @@ class TelegramAdapter:
             return True
         return bool(cls._PLACEHOLDER_TITLE_RE.match(text))
 
+    # Titles ending in one of these read as truncated (cloud/thinking models can
+    # exhaust the token budget mid-title), so we reject and retry them.
+    _TITLE_TRAILING_STOPWORDS = frozenset(
+        {"the", "of", "a", "an", "and", "to", "with", "in", "on", "at", "for",
+         "her", "his", "their", "my", "your"}
+    )
+
+    @classmethod
+    def _clean_generated_title(cls, raw: str | None) -> str | None:
+        """Extract a clean, complete title from raw LLM output, or None."""
+        lines = [
+            ln.strip().strip("\"'").strip().rstrip(".")
+            for ln in str(raw or "").splitlines()
+            if ln.strip()
+        ]
+        if not lines:
+            return None
+        title = lines[-1].strip()  # title usually follows any reasoning lines
+        words = title.split()
+        if not (2 <= len(words) <= 8) or len(title) > 80:
+            return None
+        if words[-1].lower() in cls._TITLE_TRAILING_STOPWORDS:
+            return None  # looks truncated
+        return title
+
     async def _auto_title_adventure(
         self, adventure_id: int, user_id: int,
     ) -> None:
@@ -3233,19 +3258,26 @@ class TelegramAdapter:
                     "content": (
                         "You are a creative writing assistant. "
                         "Based on the roleplay excerpt below, produce a short evocative title "
-                        "(3 to 6 words). Reply with ONLY the title — no quotes, no punctuation at the end, no explanation."
+                        "(3 to 6 words). Reply with ONLY the title — no quotes, no trailing "
+                        "punctuation, no explanation, no reasoning."
                     ),
                 },
                 {"role": "user", "content": f"Roleplay excerpt:\n{exchange_text}\n\nTitle:"},
             ]
-            new_title, _ = await self._call_direct_llm(
-                user_id=user_id,
-                messages=title_messages,
-                path="adventure_title",
-                options={"num_predict": 24},
-            )
-            new_title = new_title.strip().strip("\"'").strip()
-            if new_title and len(new_title) <= 80:
+            new_title = None
+            for _attempt in range(2):
+                raw, _ = await self._call_direct_llm(
+                    user_id=user_id,
+                    messages=title_messages,
+                    path="adventure_title",
+                    # Generous budget: cloud/thinking models emit reasoning tokens
+                    # first, and a tiny budget starves the actual title.
+                    options={"num_predict": 600, "temperature": 0.35},
+                )
+                new_title = self._clean_generated_title(raw)
+                if new_title:
+                    break
+            if new_title:
                 with db_rw() as conn:
                     conn.execute(
                         "UPDATE adventures SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
