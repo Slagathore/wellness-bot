@@ -3459,6 +3459,23 @@ class TelegramAdapter:
         except Exception:
             pass
 
+        # Inject the user's /nsfwpref preferences (safe words, hard/soft limits,
+        # kinks, intensity, pacing) so adventures honour the same boundaries as
+        # downbad chat. Adventures keep their own separate memory/RAG, but the
+        # user's safety limits and safe word must always reach the model.
+        try:
+            pref_svc = self._get_preference_service()
+            if pref_svc is not None and pref_svc.get_nsfw_opt_in(user_id):
+                from app.orchestrator.persona_runtime import \
+                    _telegram_user_id_for_db_user
+                telegram_id = _telegram_user_id_for_db_user(user_id) or user_id
+                prefs = pref_svc.load_nsfw_preferences(user_id=user_id, telegram_id=telegram_id)
+                nsfw_ctx = pref_svc.format_nsfw_context(prefs)
+                if nsfw_ctx and nsfw_ctx.strip():
+                    system_prompt += f"\n\n{nsfw_ctx.strip()}"
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Adventure NSFW context load failed for user %s: %s", user_id, exc)
+
         # Build conversation history — OOC/retcon system messages formatted as annotated turns
         llm_messages = [{"role": "system", "content": system_prompt}]
         for msg in reversed(recent_msgs):
