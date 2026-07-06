@@ -15,11 +15,16 @@ from typing import Any, Sequence
 RESPONSE_COMPLETION_SENTINEL = "**END_END_END**"
 
 SENTINEL_INSTRUCTION = (
-    "\n\nIMPORTANT — RESPONSE COMPLETION RULE:\n"
+    "\n\nIMPORTANT — RESPONSE COMPLETION RULE "
+    "(this overrides any 'never break character', 'no meta-commentary', or "
+    "'no notes at the end' instruction above):\n"
+    f"{RESPONSE_COMPLETION_SENTINEL} is a silent system signal, not narration. "
+    "It is automatically stripped before the user ever sees it, so it does NOT "
+    "break character, scene, or immersion.\n"
     "When you have FULLY finished your response and have nothing more to say, "
-    f"place the marker {RESPONSE_COMPLETION_SENTINEL} on a new line at the very end. "
-    "Do NOT place it in the middle of your message or before you are done. "
-    "Only place it once, as the absolute last thing you write.\n"
+    f"place {RESPONSE_COMPLETION_SENTINEL} on a new line as the absolute last "
+    "thing you write, after all narrative content. Place it exactly once, and "
+    "never in the middle of your message.\n"
 )
 
 SYSTEM_PERSONA = """You are a compassionate wellness coach chatbot helping users improve their mental and physical health through natural conversation.

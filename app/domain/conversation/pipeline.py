@@ -57,6 +57,42 @@ def _strip_sentinel(text: str) -> tuple[str, bool]:
     return text, False
 
 
+# Hard ceiling on a single stitched reply (original + continuations). Prevents
+# the continuation loop from concatenating multiple full generations into one
+# enormous message, which is what roleplay/downbad replies were doing.
+MAX_STITCHED_RESPONSE_CHARS = 6000
+
+
+def _assess_truncation(response: Any, sentinel_found: bool) -> bool:
+    """Decide whether a reply was actually cut off at the token limit.
+
+    Trust the provider's own stop reason first: a native ``done_reason`` /
+    ``finish_reason`` of ``"length"`` means genuine truncation, while any other
+    explicit stop reason means the model finished on its own — even if it
+    declined to emit the completion sentinel, which high-temperature
+    roleplay/downbad personas routinely do. Only when the provider reports no
+    stop reason at all do we fall back to sentinel-absence as a weak signal.
+
+    Previously, sentinel-absence alone flagged truncation, so nearly every
+    roleplay/downbad reply triggered the continuation loop and ballooned.
+    """
+    if not isinstance(response, dict) or not response.get("text"):
+        return False
+    raw = response.get("raw", {}) or {}
+    done_reason = str(raw.get("done_reason", "") or "")
+    finish_reason = ""
+    choices = raw.get("choices")
+    if isinstance(choices, list) and choices:
+        finish_reason = str((choices[0] or {}).get("finish_reason", "") or "")
+    if done_reason == "length" or finish_reason == "length":
+        return True
+    if done_reason or finish_reason:
+        # Provider explicitly reported a non-length stop → response is complete.
+        return False
+    # No provider signal at all → fall back to sentinel presence.
+    return not sentinel_found
+
+
 def _remove_leaked_sentinels(text: str) -> str:
     """Remove stray sentinel tokens that leaked into visible text."""
     cleaned = _SENTINEL_ANY_RE.sub("", text or "")
@@ -650,48 +686,31 @@ async def generate_response_async(
     #  1. Sentinel missing = model didn't finish naturally
     #  2. Ollama local models: raw.done_reason == "length"
     #  3. Cloud models (OpenAI-compatible): choices[0].finish_reason == "length"
-    truncated = False
-    if isinstance(response, dict) and response.get("text") and not sentinel_found:
-        # Non-empty response without the sentinel → almost certainly truncated
-        truncated = True
+    truncated = _assess_truncation(response, sentinel_found)
+    if truncated:
+        _raw = response.get("raw", {}) if isinstance(response, dict) else {}
         logger.warning(
-            "[LLM] Sentinel marker missing — response likely truncated "
-            "for user %s model=%s (text length=%d)",
-            user_id, resolved_model, len(response.get("text", "")),
+            "[LLM] Response truncated (length limit) for user %s model=%s "
+            "num_predict=%s num_ctx=%s done_reason=%r; attempting continuation.",
+            user_id, resolved_model,
+            llm_opts.get("num_predict"), llm_opts.get("num_ctx"),
+            _raw.get("done_reason", ""),
         )
-    if isinstance(response, dict):
-        raw = response.get("raw", {})
-        # Ollama native signal
-        done_reason = raw.get("done_reason", "")
-        if done_reason == "length":
-            truncated = True
-        # Cloud / OpenAI-compatible signal
-        choices = raw.get("choices")
-        if isinstance(choices, list) and choices:
-            finish_reason = (choices[0] or {}).get("finish_reason", "")
-            if finish_reason == "length":
-                truncated = True
-        if truncated:
-            logger.warning(
-                "[LLM] Response truncated for user %s "
-                "model=%s num_predict=%s num_ctx=%s done_reason=%r finish_reason=%r. "
-                "Consider increasing limits.",
-                user_id,
-                resolved_model,
-                llm_opts.get("num_predict"),
-                llm_opts.get("num_ctx"),
-                done_reason,
-                (choices[0] or {}).get("finish_reason", "") if isinstance(raw.get("choices"), list) and raw.get("choices") else "",
-            )
 
     # --- Continuation on truncation (gated by feature flag) ---
     # When enabled, if the response was truncated, send a follow-up
     # "please continue" to get the rest of the response and stitch
-    # the pieces together. Limited to 2 continuations max.
+    # the pieces together. Limited to 2 continuations AND a total-length cap.
     if truncated and feature_enabled("llm_continuation_on_truncation") and isinstance(response, dict):
         partial_text = response.get("text", "")
         base_prompt = list(prompt)  # original prompt — do NOT mutate; rebuild each iteration
         for _cont_attempt in range(2):  # max 2 continuations
+            if len(partial_text) >= MAX_STITCHED_RESPONSE_CHARS:
+                logger.info(
+                    "[LLM] Continuation length cap (%d chars) reached for user %s; stopping.",
+                    MAX_STITCHED_RESPONSE_CHARS, user_id,
+                )
+                break
             continuation_attempts += 1
             # Rebuild from the base prompt each time so we never send duplicate assistant turns.
             continuation_prompt = base_prompt + [
@@ -1004,37 +1023,17 @@ def _generate_response_sync(
     if isinstance(response, dict) and response.get("text"):
         response["text"], sentinel_found = _strip_sentinel(response["text"])
 
-    # Detect truncation from multiple signals (mirrors async path)
-    truncated = False
-    if isinstance(response, dict) and response.get("text") and not sentinel_found:
-        truncated = True
+    # Detect truncation (mirrors async path via the shared assessor)
+    truncated = _assess_truncation(response, sentinel_found)
+    if truncated:
+        _raw = response.get("raw", {}) if isinstance(response, dict) else {}
         logger.warning(
-            "[LLM] Sentinel marker missing — response likely truncated "
-            "for user %s model=%s (text length=%d)",
-            user_id, resolved_model, len(response.get("text", "")),
+            "[LLM] Response truncated (length limit) for user %s model=%s "
+            "num_predict=%s num_ctx=%s done_reason=%r; attempting continuation.",
+            user_id, resolved_model,
+            llm_opts.get("num_predict"), llm_opts.get("num_ctx"),
+            _raw.get("done_reason", ""),
         )
-    if isinstance(response, dict):
-        raw = response.get("raw", {})
-        done_reason = raw.get("done_reason", "")
-        if done_reason == "length":
-            truncated = True
-        choices = raw.get("choices")
-        if isinstance(choices, list) and choices:
-            finish_reason = (choices[0] or {}).get("finish_reason", "")
-            if finish_reason == "length":
-                truncated = True
-        if truncated:
-            logger.warning(
-                "[LLM] Response truncated for user %s "
-                "model=%s num_predict=%s num_ctx=%s done_reason=%r finish_reason=%r. "
-                "Consider increasing limits.",
-                user_id,
-                resolved_model,
-                llm_opts.get("num_predict"),
-                llm_opts.get("num_ctx"),
-                done_reason,
-                (choices[0] or {}).get("finish_reason", "") if isinstance(raw.get("choices"), list) and raw.get("choices") else "",
-            )
 
     # --- Continuation on truncation (gated by feature flag) ---
     # Sync mirror of the async continuation logic above.
@@ -1042,6 +1041,12 @@ def _generate_response_sync(
         partial_text = response.get("text", "")
         base_prompt = list(prompt)  # original prompt — do NOT mutate; rebuild each iteration
         for _cont_attempt in range(2):
+            if len(partial_text) >= MAX_STITCHED_RESPONSE_CHARS:
+                logger.info(
+                    "[LLM] Continuation length cap (%d chars) reached for user %s; stopping.",
+                    MAX_STITCHED_RESPONSE_CHARS, user_id,
+                )
+                break
             continuation_attempts += 1
             # Rebuild from the base prompt each time so we never send duplicate assistant turns.
             continuation_prompt = base_prompt + [
@@ -1181,11 +1186,13 @@ def resolve_llm_options(
         "num_predict": 4096,
     }
 
-    # Layer 1: admin defaults
+    # Layer 1: admin defaults (clamped to the same safe ranges as user overrides,
+    # so a bad llm_defaults.json can't push num_predict past the ceiling)
     admin = _load_admin_llm_defaults(personality_name)
     for k, v in admin.items():
         if k in LLM_PARAM_RANGES and v is not None:
-            opts[k] = _safe_float(v, opts.get(k, 0))
+            lo, hi = LLM_PARAM_RANGES[k]
+            opts[k] = max(lo, min(hi, _safe_float(v, opts.get(k, 0))))
 
     # Layer 2: user overrides
     user = _load_user_llm_settings(user_id)
