@@ -59,7 +59,7 @@ def _configure_temp_env(env: dict[str, str]) -> str:
 
 def main() -> None:
     env = os.environ.copy()
-    admin_port = env.get("ADMIN_PORT", "8200")
+    admin_port = env.get("ADMIN_PORT", "8110")
     temp_root = _configure_temp_env(env)
 
     processes = []

@@ -11,10 +11,10 @@ Start:
     python mira_imagegen.py
 
 Or with uvicorn directly (more control):
-    uvicorn mira_imagegen:app --host 0.0.0.0 --port 7860
+    uvicorn mira_imagegen:app --host 0.0.0.0 --port 7865
 
 Mira calls it like:
-    POST http://localhost:7860/generate
+    POST http://localhost:7865/generate
     Body: {"prompt": "a dragon fighting a mech in a neon city"}
 
 Returns: PNG image bytes (content-type: image/png)
@@ -40,7 +40,7 @@ BASE_REPO = "black-forest-labs/FLUX.2-klein-9B"
 
 # Server settings
 HOST = "0.0.0.0"    # Bind to all interfaces (so Mira can reach it from localhost or LAN)
-PORT = 7860          # Change if this conflicts with something
+PORT = 7865          # Change if this conflicts with something
 
 # Default generation settings (overridable per-request)
 DEFAULT_WIDTH = 1024
@@ -170,7 +170,7 @@ async def generate(req: GenerateRequest):
 
     From Mira's bot code, you'd call this like:
         import httpx
-        resp = httpx.post("http://localhost:7860/generate", json={"prompt": "..."})
+        resp = httpx.post("http://localhost:7865/generate", json={"prompt": "..."})
         image_bytes = resp.content  # This is the PNG
     """
     if pipe is None:

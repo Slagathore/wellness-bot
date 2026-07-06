@@ -36,8 +36,8 @@ function Get-WellnessTempRoot {
     return (Join-Path $HOME ".cache\wellness-bot\tmp")
 }
 
-$adminPort = if ($env:ADMIN_PORT) { $env:ADMIN_PORT } else { "8200" }
-$flux2Port = if ($env:FLUX2_KLEIN_PORT) { $env:FLUX2_KLEIN_PORT } else { "7860" }
+$adminPort = if ($env:ADMIN_PORT) { $env:ADMIN_PORT } else { "8110" }
+$flux2Port = if ($env:FLUX2_KLEIN_PORT) { $env:FLUX2_KLEIN_PORT } else { "7865" }
 $jobNames = @("Flux2KleinImage", "OutboxSender", "Embeddings", "Sentiments", "AdminServer")
 $tempRoot = Get-WellnessTempRoot
 

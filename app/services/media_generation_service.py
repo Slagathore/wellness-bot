@@ -58,7 +58,7 @@ MOTION_MODULE_DIR: Path = Path.home() / ".cache" / "imagegen" / "motion_modules"
 MOTION_MODULE_FILENAME: str = "mm_sdxl_v10_beta.ckpt"
 
 # Klein server URL used for cross-process VRAM coordination
-_KLEIN_SERVER_URL: str = "http://127.0.0.1:7860"
+_KLEIN_SERVER_URL: str = "http://127.0.0.1:7865"
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _LEGACY_REPO_TEMP_ROOT = _REPO_ROOT / "wellness_data" / "tmp"
 
@@ -1196,7 +1196,7 @@ class MediaGenerationService:
             ) from exc
 
         cfg = settings()
-        base_url = str(getattr(cfg, "flux2_klein_url", "http://127.0.0.1:7860")).rstrip("/")
+        base_url = str(getattr(cfg, "flux2_klein_url", "http://127.0.0.1:7865")).rstrip("/")
         timeout_seconds = max(
             float(getattr(cfg, "flux2_klein_timeout_seconds", 900.0) or 900.0),
             60.0,

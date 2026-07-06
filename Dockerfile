@@ -21,6 +21,6 @@ COPY . .
 
 VOLUME ["/app/wellness_data"]
 
-EXPOSE 9102
+EXPOSE 9103
 
 CMD ["python", "-m", "app.main_modular"]

@@ -88,7 +88,7 @@ _METRICS_STARTED = False
 _METRICS_LOCK = threading.Lock()
 
 
-def start_metrics_server(port: int = 9102) -> None:
+def start_metrics_server(port: int = 9103) -> None:
     """Start the Prometheus metrics server once."""
 
     global _METRICS_STARTED

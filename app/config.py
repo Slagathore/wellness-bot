@@ -52,9 +52,9 @@ class Settings(BaseSettings):
     hf_token: str | None = None
 
     # External image backends
-    flux2_klein_url: str = "http://127.0.0.1:7860"
+    flux2_klein_url: str = "http://127.0.0.1:7865"
     flux2_klein_host: str = "0.0.0.0"
-    flux2_klein_port: int = 7860
+    flux2_klein_port: int = 7865
     flux2_klein_timeout_seconds: float = 900.0
     flux2_klein_gguf_path: str = ""
     flux2_klein_base_repo: str = "black-forest-labs/FLUX.2-klein-9B"

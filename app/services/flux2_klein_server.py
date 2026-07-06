@@ -250,6 +250,6 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(message)s")
     cfg = _cfg()
     host = str(cfg.flux2_klein_host).strip() or "0.0.0.0"
-    port = int(cfg.flux2_klein_port or 7860)
+    port = int(cfg.flux2_klein_port or 7865)
     log.info("Starting FLUX.2 Klein image service on %s:%d", host, port)
     uvicorn.run(app, host=host, port=port)
