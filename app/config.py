@@ -59,6 +59,12 @@ class Settings(BaseSettings):
     # HuggingFace (optional - diffusers also auto-reads ~/.cache/huggingface/token)
     hf_token: str | None = None
 
+    # Image generation via the DungeonMaster SDXL backend (standalone server;
+    # run `python dm_imagegen.py --serve`). This is the only image path used.
+    dm_image_url: str = "http://127.0.0.1:8500"
+    dm_image_enabled: bool = True
+    dm_image_timeout_seconds: float = 300.0
+
     # External image backends
     flux2_klein_url: str = "http://127.0.0.1:7865"
     flux2_klein_host: str = "0.0.0.0"
