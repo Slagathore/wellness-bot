@@ -33,6 +33,7 @@ from app.db import db_ro, db_rw
 from app.domain import events
 from app.domain.adventure.lore import refresh_adventure_lore
 from app.domain.conversation.service import UserMessage
+from app.services.dm_image import ImageUnavailable, generate_image, is_enabled
 from app.domain.safety.resources import CRISIS_RESOURCE_MESSAGE
 from app.domain.turns.audit import append_turn_route, build_route_entry, create_turn_audit
 from app.feature_flags import enabled
@@ -240,6 +241,7 @@ def _build_help_text() -> str:
         "  /adventure choices <on|off> - Toggle button choices",
         "  /adventure info - Show adventure details",
         "  /adventure reset - Reset current adventure story",
+        "  /imagine <description> - Generate an image",
         "  /deletehistory <24h|7d|30d|all> - Erase history",
     ]
     if enabled("user_feedback"):
@@ -637,6 +639,94 @@ class TelegramAdapter:
             container.register("preference_service", lambda: svc, singleton=True)
             return svc
 
+    def _nsfw_opt_in(self, db_user_id: int) -> bool:
+        try:
+            return bool(self._get_preference_service().get_nsfw_opt_in(db_user_id))
+        except Exception:  # noqa: BLE001
+            return False
+
+    async def _distill_image_prompt(self, user_id: int, text: str) -> str:
+        """Turn narrative text into a concise image prompt (LLM), with fallback."""
+        text = (text or "").strip()
+        if not text:
+            return ""
+        try:
+            out, _ = await self._call_direct_llm(
+                user_id=user_id,
+                messages=[
+                    {"role": "system", "content": (
+                        "Convert the scene into an image-generation prompt: ONLY a "
+                        "comma-separated list of vivid visual details (subject, setting, "
+                        "lighting, mood, composition), under 60 words. No sentences, no "
+                        "reasoning, no quotes."
+                    )},
+                    {"role": "user", "content": sanitize_untrusted_text(text, limit=1500)},
+                ],
+                path="image_prompt",
+                options={"temperature": 0.4, "num_predict": 300},
+            )
+            lines = [ln.strip() for ln in str(out or "").splitlines() if ln.strip()]
+            prompt = sanitize_untrusted_text(lines[-1] if lines else "", limit=400)
+            return prompt or sanitize_untrusted_text(text, limit=400)
+        except Exception:  # noqa: BLE001
+            return sanitize_untrusted_text(text, limit=400)
+
+    async def _send_generated_image(
+        self, chat_id: int, *, subject: str, nsfw: bool = False,
+        style: str | None = None, caption: str | None = None,
+    ) -> bool:
+        """Generate one image via the DM server and send it, or report failure."""
+        import io
+        if not self._application:
+            return False
+        try:
+            await self._application.bot.send_chat_action(
+                chat_id=int(chat_id), action=ChatAction.UPLOAD_PHOTO
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            png = await generate_image(subject, style=style, nsfw=nsfw)
+        except ImageUnavailable as exc:
+            await self._application.bot.send_message(
+                chat_id=int(chat_id),
+                text=("🎨 Image generation isn't available right now.\n"
+                      "Start the image server with `python dm_imagegen.py --serve`.\n"
+                      f"({exc})"),
+                parse_mode="Markdown",
+            )
+            return False
+        buf = io.BytesIO(png)
+        buf.name = "scene.png"
+        await self._application.bot.send_photo(
+            chat_id=int(chat_id), photo=buf,
+            caption=(caption or "")[:1000] or None,
+        )
+        return True
+
+    async def _on_imagine_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        msg = update.message
+        if msg is None:
+            return
+        prompt = (msg.text or "").partition(" ")[2].strip()
+        if not prompt:
+            await msg.reply_text(
+                "Usage: /imagine <description>\n"
+                "Example: /imagine a dragon over a burning city, cinematic, dramatic lighting"
+            )
+            return
+        if not is_enabled():
+            await msg.reply_text("🎨 Image generation is disabled.")
+            return
+        user_source = msg.from_user or update.effective_user
+        if user_source is None:
+            return
+        db_user_id = self._ensure_user(user_source)
+        await self._send_generated_image(
+            msg.chat_id, subject=prompt, nsfw=self._nsfw_opt_in(db_user_id),
+            caption=f"🎨 {prompt[:180]}",
+        )
+
     async def _call_direct_llm(
         self,
         *,
@@ -936,6 +1026,8 @@ class TelegramAdapter:
                     [InlineKeyboardButton("Complete Adventure", callback_data="advhub:complete")],
                 ]
             )
+            if is_enabled():
+                rows.insert(1, [InlineKeyboardButton("🎨 Illustrate Scene", callback_data="advhub:image")])
         return InlineKeyboardMarkup(rows)
 
     async def _show_character_hub(
@@ -1818,6 +1910,7 @@ class TelegramAdapter:
         app.add_handler(CommandHandler("character", self._on_character_command))
         app.add_handler(CommandHandler("adventure", self._on_adventure_command))
         app.add_handler(CommandHandler("nsfwpref", self._on_nsfwpref_command))
+        app.add_handler(CommandHandler("imagine", self._on_imagine_command))
         app.add_handler(CommandHandler("helpmodes", self._on_helpmodes_command))
         app.add_handler(CommandHandler("onboard", self._on_onboard_command))
 
@@ -5919,6 +6012,30 @@ class TelegramAdapter:
                 user_id=user_id,
                 edit=True,
                 offset=offset,
+            )
+            return
+
+        if action == "image":
+            adv_id = context.user_data.get("active_adventure")
+            adv_id_int = int(adv_id) if isinstance(adv_id, int) else None
+            if adv_id_int is None:
+                await query.answer("No active adventure.", show_alert=True)
+                return
+            await query.answer("Painting the scene…")
+            with db_ro() as conn:
+                last = conn.execute(
+                    "SELECT content FROM adventure_messages WHERE adventure_id = ? "
+                    "AND role IN ('narrator', 'character') ORDER BY id DESC LIMIT 1",
+                    (adv_id_int,),
+                ).fetchone()
+            scene = last["content"] if last else ""
+            if not scene.strip():
+                await query.message.reply_text("There's no scene to illustrate yet — play a turn first.")
+                return
+            prompt = await self._distill_image_prompt(user_id, scene)
+            await self._send_generated_image(
+                query.message.chat_id, subject=prompt,
+                nsfw=self._nsfw_opt_in(user_id), style="scene",
             )
             return
 
