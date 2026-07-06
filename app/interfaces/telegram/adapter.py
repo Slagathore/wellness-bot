@@ -227,7 +227,7 @@ def _build_help_text() -> str:
         "  /adventure addchar <name> - Add character",
         "  /adventure lore <text> - Set world lore",
         "  /adventure player <who you are> - Set your role",
-        "  /adventure length <short|medium|long> - Set reply length",
+        "  /adventure length <punchy|moderate|elaborative> - Set reply length",
         "  /adventure choices <on|off> - Toggle button choices",
         "  /adventure info - Show adventure details",
         "  /adventure reset - Reset current adventure story",
@@ -992,6 +992,9 @@ class TelegramAdapter:
     @staticmethod
     def _normalize_adventure_reply_length(value: str | None) -> str | None:
         normalized = str(value or "").strip().lower()
+        # Accept the short/medium/long synonyms the older help text advertised.
+        synonyms = {"short": "punchy", "medium": "moderate", "long": "elaborative"}
+        normalized = synonyms.get(normalized, normalized)
         if normalized in _ADVENTURE_REPLY_LENGTH_PRESETS:
             return normalized
         return None
@@ -1008,7 +1011,7 @@ class TelegramAdapter:
             settings.update(candidate)
         settings["reply_length"] = (
             self._normalize_adventure_reply_length(settings.get("reply_length"))
-            or "medium"
+            or "moderate"
         )
         settings["choice_mode"] = bool(settings.get("choice_mode"))
         for key in ("player_role", "objective", "setting", "tone_notes"):
@@ -1659,7 +1662,7 @@ class TelegramAdapter:
             total_pages = max(1, (len(characters) + page_size - 1) // page_size)
             safe_page = max(0, min(page, total_pages - 1))
             text = (
-                f"?? **Custom Characters** (page {safe_page + 1}/{total_pages})\n\n"
+                f"🎭 **Custom Characters** (page {safe_page + 1}/{total_pages})\n\n"
                 f"You have {len(characters)} character(s). Tap one to switch."
             )
             reply_markup = self._build_character_list_keyboard(
@@ -1750,7 +1753,7 @@ class TelegramAdapter:
         buttons.append([InlineKeyboardButton("Make New Character", callback_data="advaddchar:create")])
         buttons.append([InlineKeyboardButton("Back", callback_data="advhub:menu")])
         text = (
-            "?? **Add Character To Adventure**\n\n"
+            "🎭 **Add Character To Adventure**\n\n"
             "Pick an existing custom character or create a new one and attach it to the active adventure."
         )
         if edit:
@@ -1780,7 +1783,7 @@ class TelegramAdapter:
                 ).fetchone()
             lore = row["lore"] if row and row["lore"] else "No lore set yet."
             title = row["title"] if row else f"Adventure #{adv_id}"
-            text = f"?? **{title} Lore**\n\n{lore}"
+            text = f"📖 **{title} Lore**\n\n{lore}"
             reply_markup = self._build_adventure_hub_keyboard(active_adventure=int(adv_id))
         if edit:
             await target_message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
@@ -3581,7 +3584,7 @@ class TelegramAdapter:
             "• workfocus - ADHD-friendly productivity & accountability partner\n\n"
             "**Special Modes:**\n"
             "• roleplay - Safe, consensual roleplay scenarios\n"
-            "  - Establishes safe words before starting\n"
+            "  - Set safe words and limits anytime with `/nsfwpref`\n"
             "  - ⚠ Proactive reminders are DISABLED in this mode\n\n"
             "• downbad - Flirty, playful, intimate conversations\n"
             "  - For adults only, consensual and respectful\n"
@@ -5792,7 +5795,7 @@ class TelegramAdapter:
                 "attach_to_active_adventure": False,
             }
             await query.edit_message_text(
-                "?? **Character Creator**\n\n"
+                "🎭 **Character Creator**\n\n"
                 "Describe the character you want to make. You can be brief or detailed.\n\n"
                 "Examples:\n"
                 "- a shy librarian elf who loves puns\n"
@@ -6201,7 +6204,7 @@ class TelegramAdapter:
                     context.user_data.pop("character_creation", None)
                     await self._add_character_to_adventure(int(adventure_id), int(char_id))
                     await query.edit_message_text(
-                        f"?? **{parsed['name']}** saved and attached to adventure #{int(adventure_id)}!{greeting}\n\n"
+                        f"✅ **{parsed['name']}** saved and attached to adventure #{int(adventure_id)}!{greeting}\n\n"
                         "It is now available inside the current story.",
                         reply_markup=self._build_adventure_hub_keyboard(active_adventure=int(adventure_id)),
                     )
