@@ -146,7 +146,7 @@ try {
 
 Write-Host "`nStarting background services...`n" -ForegroundColor Yellow
 # Note: image generation runs in the separate DungeonMaster SDXL server
-# (`python dm_imagegen.py --serve`, :8500) — start it there when you want images.
+# (`python dm_imagegen.py --serve`, :8500) - start it there when you want images.
 
 Write-Host "  [1/4] Outbox Sender..." -NoNewline
 Start-ServiceJob -Name "OutboxSender" -Module "app.workers.outbox_sender"
@@ -202,7 +202,7 @@ if (Wait-AdminServer -Port $adminPort -TimeoutSeconds 120) {
 
 # --- Optional: Telegram Mini App webapp + its Cloudflare tunnel ---------------
 # Only when WEBAPP_ENABLED=true in .env. The webapp serves the Mini App; the
-# tunnel publishes it at WEBAPP_URL (public HTTPS — Telegram requires HTTPS,
+# tunnel publishes it at WEBAPP_URL (public HTTPS - Telegram requires HTTPS,
 # 127.0.0.1 won't work as a WebApp button).
 if ($webappEnabled) {
     Write-Host "  [webapp] Mini App server (127.0.0.1:8130)..." -NoNewline
@@ -234,7 +234,7 @@ if ($webappEnabled) {
             Write-Host " OK (connecting)" -ForegroundColor Green
         }
     } else {
-        Write-Host "  [tunnel] skipped — cloudflared or cloudflared.yml not found" -ForegroundColor DarkYellow
+        Write-Host "  [tunnel] skipped - cloudflared or cloudflared.yml not found" -ForegroundColor DarkYellow
     }
 }
 
