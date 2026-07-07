@@ -37,8 +37,7 @@ function Get-WellnessTempRoot {
 }
 
 $adminPort = if ($env:ADMIN_PORT) { $env:ADMIN_PORT } else { "8110" }
-$flux2Port = if ($env:FLUX2_KLEIN_PORT) { $env:FLUX2_KLEIN_PORT } else { "7865" }
-$jobNames = @("Flux2KleinImage", "OutboxSender", "Embeddings", "Sentiments", "AdminServer")
+$jobNames = @("OutboxSender", "Embeddings", "Sentiments", "AdminServer")
 $tempRoot = Get-WellnessTempRoot
 
 New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
@@ -74,47 +73,6 @@ function Stop-ServiceJobs {
             $job | Remove-Job -ErrorAction SilentlyContinue
         }
     }
-}
-
-function Test-Flux2KleinReady {
-    param(
-        [string]$Port
-    )
-
-    try {
-        $response = Invoke-WebRequest `
-            -UseBasicParsing `
-            -Uri "http://127.0.0.1:$Port/health" `
-            -TimeoutSec 2 `
-            -ErrorAction Stop
-        return $response.StatusCode -eq 200
-    } catch {
-        return $false
-    }
-}
-
-function Wait-Flux2KleinService {
-    param(
-        [string]$Port,
-        [int]$TimeoutSeconds = 10,
-        [switch]$RequireJob
-    )
-
-    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
-    while ((Get-Date) -lt $deadline) {
-        if (Test-Flux2KleinReady -Port $Port) {
-            return $true
-        }
-        if ($RequireJob) {
-            $job = Get-Job -Name "Flux2KleinImage" -ErrorAction SilentlyContinue
-            if (-not $job -or $job.State -in @("Completed", "Failed", "Stopped")) {
-                return $false
-            }
-        }
-        Start-Sleep -Milliseconds 500
-    }
-
-    return $false
 }
 
 function Wait-AdminServer {
@@ -170,57 +128,25 @@ try {
 }
 
 Write-Host "`nStarting background services...`n" -ForegroundColor Yellow
+# Note: image generation runs in the separate DungeonMaster SDXL server
+# (`python dm_imagegen.py --serve`, :8500) — start it there when you want images.
 
-Write-Host "  [1/5] FLUX.2 Klein Image Service (127.0.0.1:$flux2Port)..." -NoNewline
-$flux2Listener = (Get-NetTCPConnection -LocalPort $flux2Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess
-if ($flux2Listener) {
-    if (Test-Flux2KleinReady -Port $flux2Port) {
-        Write-Host " already running (PID $flux2Listener)" -ForegroundColor Yellow
-    } else {
-        Write-Host " port already in use (PID $flux2Listener), skipping managed startup" -ForegroundColor Yellow
-    }
-} else {
-    Start-ServiceJob -Name "Flux2KleinImage" -Module "app.services.flux2_klein_server"
-    Start-Sleep 2
-    $imageJob = Get-Job -Name "Flux2KleinImage" -ErrorAction SilentlyContinue
-    if (-not $imageJob -or $imageJob.State -in @("Completed", "Failed", "Stopped")) {
-        Write-Host " FAILED" -ForegroundColor Red
-        if ($imageJob) {
-            Write-Host "    Image service job state: $($imageJob.State)" -ForegroundColor Yellow
-            $output = Receive-Job -Name "Flux2KleinImage" -Keep -ErrorAction SilentlyContinue
-            if ($output) {
-                Write-Host "    Recent image service output:" -ForegroundColor Yellow
-                $output | Select-Object -Last 30 | ForEach-Object {
-                    Write-Host "      $_"
-                }
-            }
-        }
-        Stop-ServiceJobs
-        exit 1
-    }
-    if (Wait-Flux2KleinService -Port $flux2Port -TimeoutSeconds 5 -RequireJob) {
-        Write-Host " OK" -ForegroundColor Green
-    } else {
-        Write-Host " WARMING UP (continuing in background)" -ForegroundColor Yellow
-    }
-}
-
-Write-Host "  [2/5] Outbox Sender..." -NoNewline
+Write-Host "  [1/4] Outbox Sender..." -NoNewline
 Start-ServiceJob -Name "OutboxSender" -Module "app.workers.outbox_sender"
 Start-Sleep 1
 Write-Host " OK" -ForegroundColor Green
 
-Write-Host "  [3/5] Embeddings Worker..." -NoNewline
+Write-Host "  [2/4] Embeddings Worker..." -NoNewline
 Start-ServiceJob -Name "Embeddings" -Module "app.workers.embeddings"
 Start-Sleep 1
 Write-Host " OK" -ForegroundColor Green
 
-Write-Host "  [4/5] Sentiments Worker..." -NoNewline
+Write-Host "  [3/4] Sentiments Worker..." -NoNewline
 Start-ServiceJob -Name "Sentiments" -Module "app.workers.sentiments"
 Start-Sleep 1
 Write-Host " OK" -ForegroundColor Green
 
-Write-Host "  [5/5] Admin Server (127.0.0.1:$adminPort)..." -NoNewline
+Write-Host "  [4/4] Admin Server (127.0.0.1:$adminPort)..." -NoNewline
 # Release any stale process holding the admin port before starting a fresh one.
 $stalePid = (Get-NetTCPConnection -LocalPort $adminPort -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess
 if ($stalePid) {

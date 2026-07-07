@@ -13,7 +13,7 @@ A self-hosted, multi-platform AI wellness companion built on Telegram (and optio
 - **Proactive reminders** — the bot sets and delivers follow-up reminders based on conversation context
 - **Nightly analytics** — background worker summarizes daily sentiment trends
 - **Semantic memory (RAG)** — past conversations are embedded and retrieved for long-term context
-- **Image generation** — optional local or remote image backends (FLUX.2 Klein, EasyDiffusion, Perchance)
+- **Image generation** — optional, via the standalone DungeonMaster SDXL server (per-engine recipes + LoRA stacking)
 - **Admin web GUI** — FastAPI-powered moderation panel with user management, broadcast, and LLM console
 - **Discord integration** — optional Discord bot running alongside Telegram
 - **Adaptive psych tests** — in-chat personality assessments that refine the user profile
@@ -162,15 +162,13 @@ Users switch modes via in-chat commands; admins can override per-user via the ad
 
 ## Image Generation (Optional)
 
-Three backends are supported, all optional:
+All image generation is delegated to the standalone **DungeonMaster SDXL server**
+(`python dm_imagegen.py --serve`, default `127.0.0.1:8500`). The bot POSTs a prompt
+and gets a PNG back — no torch/diffusers run in this process, so startup stays light.
 
-| Backend | Notes |
-| --- | --- |
-| **FLUX.2 Klein** | Local GPU inference via a sidecar FastAPI server; see `flux2kleinpipeline.md` |
-| **EasyDiffusion** | Point `EASY_DIFFUSION_URL` at a running EasyDiffusion instance |
-| **Perchance** | Browser-based; requires `playwright install chromium` after pip install |
-
-Uncomment the relevant section in `requirements.txt` for local diffusion support.
+- Point the bot at it with `DM_IMAGE_URL` (default `http://127.0.0.1:8500`); toggle with `DM_IMAGE_ENABLED`.
+- Per-engine recipes route by style/rating (realism → jugg/lustify, anime → wai, anthro → pony) with ecosystem-matched LoRA stacking.
+- If the server isn't running, image buttons hide and `/imagine` reports it gracefully — nothing else is affected.
 
 ---
 
@@ -224,7 +222,6 @@ wellness-bot/
 ├── scripts/                  # Bootstrap, migrations
 ├── tests/                    # pytest suite
 ├── systemd/                  # Linux service units
-├── flux2kleinpipeline.md     # Local FLUX image gen sidecar
 ├── .env.example              # Configuration reference
 └── requirements.txt
 ```
