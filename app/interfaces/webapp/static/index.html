@@ -207,6 +207,7 @@
     const tg = window.Telegram ? window.Telegram.WebApp : null;
     if (tg) { tg.ready(); tg.expand(); }
     const INIT = tg ? tg.initData : "";
+    const BROWSER = !INIT;  // opened in a normal browser (no Telegram initData) -> cookie auth
     const H = { "Content-Type": "application/json", "Authorization": "tma " + INIT };
     const PLACEHOLDERS = { do: "What do you do?", say: "What do you say?", story: "Write the next part of the story…" };
 
@@ -250,8 +251,11 @@
         h += `<div class="pager">
           <button id="prev" ${from <= 0 ? "disabled" : ""}>‹ Newer</button>
           <span class="hint" style="font-size:13px;">${from + 1}–${to} of ${state.total}</span>
-          <button id="next" ${to >= state.total ? "disabled" : ""}>Older ›</button></div></div>`;
+          <button id="next" ${to >= state.total ? "disabled" : ""}>Older ›</button></div>`;
+        if (BROWSER) h += '<div style="text-align:center;padding:8px 0 20px;"><span class="hint" id="signout" style="cursor:pointer;text-decoration:underline;font-size:13px;">Sign out</span></div>';
+        h += '</div>';
         main.innerHTML = h;
+        if ($("signout")) $("signout").onclick = logout;
         main.querySelectorAll(".adv").forEach(el => el.onclick = () => openStory(+el.dataset.id, el.querySelector(".t").textContent));
         if ($("prev")) $("prev").onclick = () => { state.offset = Math.max(0, state.offset - state.limit); showList(); };
         if ($("next")) $("next").onclick = () => { state.offset += state.limit; showList(); };
@@ -638,7 +642,57 @@
     input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 120) + "px"; });
     input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendTurn(); } });
 
-    showList();
+    /* ---------- Boot / browser login ---------- */
+    async function boot() {
+      // Inside Telegram we authenticate via initData. In a browser we need a
+      // session cookie (set by the /webapp magic link or a password login).
+      if (BROWSER) {
+        try { await api("/api/me"); }
+        catch (e) { return showLogin(); }
+      }
+      showList();
+    }
+
+    async function showLogin() {
+      state.view = "login";
+      backEl.style.display = "none"; dock.classList.add("hidden");
+      newBtn.classList.add("hidden"); menuBtn.classList.remove("show");
+      titleEl.textContent = "Mira";
+      let pwEnabled = true;
+      try { pwEnabled = !!(await (await fetch("/api/auth/config")).json()).password_enabled; } catch (e) {}
+      if (!pwEnabled) {
+        main.innerHTML = '<div class="empty">Open this from the <b>Telegram</b> app,<br>or send <b>/webapp</b> to the bot for a sign-in link.</div>';
+        return;
+      }
+      main.innerHTML = `<div class="create" style="max-width:360px;">
+        <label>Password</label>
+        <input id="lg-pw" type="password" placeholder="Your web password" autocomplete="current-password" />
+        <button class="go" id="lg-go">Sign in</button>
+        <div class="status" id="lg-status"></div>
+        <p class="hint" style="text-align:center;font-size:12.5px;margin-top:18px;">
+          Or send <b>/webapp</b> to the bot in Telegram for a one-tap sign-in link.</p>
+      </div>`;
+      const submit = async () => {
+        const token = $("lg-pw").value;
+        if (!token) return;
+        $("lg-go").disabled = true; $("lg-status").textContent = "Signing in…";
+        try {
+          const r = await fetch("/api/login", { method: "POST",
+            headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) });
+          if (!r.ok) throw new Error(r.status === 401 ? "Wrong password" : "Error " + r.status);
+          showList();
+        } catch (e) { $("lg-status").textContent = "⚠️ " + e.message; $("lg-go").disabled = false; }
+      };
+      $("lg-go").onclick = submit;
+      $("lg-pw").addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+    }
+
+    async function logout() {
+      try { await fetch("/api/logout", { method: "POST" }); } catch (e) {}
+      showLogin();
+    }
+
+    boot();
   </script>
 </body>
 </html>

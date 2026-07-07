@@ -17,6 +17,7 @@ import logging
 import re
 from typing import Any, Dict, List, Optional
 
+from app.config import settings
 from app.db import db_ro, db_rw
 from app.domain.adventure.lore import (_load_settings, lore_refresh_due,
                                        refresh_adventure_lore)
@@ -62,6 +63,19 @@ class WebappService:
                 (telegram_user_id, username, first_name or username or "Player"),
             )
             return int(conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
+
+    def owner_user_id(self) -> Optional[int]:
+        """DB user id for the ADMIN_USERNAME account — the identity the browser
+        password logs in as. None if no matching user exists yet."""
+        admin = (getattr(settings(), "admin_username", None) or "").strip().lstrip("@")
+        if not admin:
+            return None
+        with db_ro() as conn:
+            row = conn.execute(
+                "SELECT id FROM users WHERE lower(telegram_username) = lower(?) ORDER BY id LIMIT 1",
+                (admin,),
+            ).fetchone()
+        return int(row["id"]) if row else None
 
     # -- reads -------------------------------------------------------------
     def list_characters(self, db_user_id: int) -> List[Dict[str, Any]]:

@@ -29,14 +29,26 @@ def _auth_header(telegram_user_id: int) -> dict:
 @pytest.fixture
 def client(test_config, monkeypatch):
     from app.interfaces.webapp import server
+    from app.interfaces.webapp import service as service_module
 
     # server.py binds `from app.config import settings` at import, so patch the
     # server module's reference too (or auth verifies against the real bot
-    # token, not the test token, when run after other tests).
+    # token, not the test token, when run after other tests). The service module
+    # also reads settings (owner_user_id), so patch it there as well.
     monkeypatch.setattr(server, "settings", lambda: test_config)
+    monkeypatch.setattr(service_module, "settings", lambda: test_config)
     # initData freshness would reject auth_date=1e6; disable age check for tests.
     test_config.webapp_initdata_max_age_seconds = 0
     return TestClient(server.app)
+
+
+def _make_owner(telegram_user_id: int, username: str) -> int:
+    with db_rw() as conn:
+        conn.execute(
+            "INSERT INTO users(telegram_user_id, telegram_username, display_name) VALUES (?, ?, ?)",
+            (telegram_user_id, username, "Owner"),
+        )
+        return int(conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"])
 
 
 def _make_adventure(user_id: int, title="Test Quest", lore="A dark wood.") -> int:
@@ -430,3 +442,64 @@ def test_cannot_access_another_users_adventure(client, test_user):
 
     resp = client.get(f"/api/adventures/{other_adv}", headers=_auth_header(telegram_id))
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Browser access (outside Telegram): password login + per-user magic link.
+# ---------------------------------------------------------------------------
+
+def test_login_disabled_without_token(client, test_config):
+    test_config.webapp_access_token = None
+    assert client.post("/api/login", json={"token": "x"}).status_code == 404
+    assert client.get("/api/auth/config").json()["password_enabled"] is False
+
+
+def test_login_wrong_password(client, test_config):
+    test_config.webapp_access_token = "dungeon"
+    test_config.admin_username = "owner"
+    _make_owner(999001, "owner")
+    assert client.post("/api/login", json={"token": "nope"}).status_code == 401
+    # still unauthenticated afterward
+    assert client.get("/api/me").status_code == 401
+
+
+def test_password_login_sets_cookie_and_maps_to_owner(client, test_config):
+    test_config.webapp_access_token = "dungeon"
+    test_config.admin_username = "owner"
+    uid = _make_owner(999002, "owner")
+    adv = _make_adventure(uid, title="Owner Quest")
+    assert client.get("/api/auth/config").json()["password_enabled"] is True
+
+    r = client.post("/api/login", json={"token": "dungeon"})
+    assert r.status_code == 200 and r.json()["ok"] is True
+    # cookie now carries auth — protected endpoints work with no initData header
+    me = client.get("/api/me")
+    assert me.status_code == 200 and me.json()["user_id"] == uid
+    listing = client.get("/api/adventures").json()
+    assert any(a["id"] == adv for a in listing["items"])
+
+
+def test_magic_link_sets_cookie(client, test_config):
+    from app.interfaces.webapp.auth import session_secret, sign_session
+
+    uid = _make_owner(999003, "someone")
+    token = sign_session(uid, session_secret(TOKEN), ttl_seconds=600)
+    r = client.get(f"/login?t={token}", follow_redirects=False)
+    assert r.status_code == 302
+    me = client.get("/api/me")
+    assert me.status_code == 200 and me.json()["user_id"] == uid
+
+
+def test_magic_link_invalid_or_expired(client):
+    assert client.get("/login?t=1.1.deadbeef", follow_redirects=False).status_code == 401
+    assert client.get("/api/me").status_code == 401
+
+
+def test_logout_clears_cookie(client, test_config):
+    test_config.webapp_access_token = "dungeon"
+    test_config.admin_username = "owner"
+    _make_owner(999004, "owner")
+    client.post("/api/login", json={"token": "dungeon"})
+    assert client.get("/api/me").status_code == 200
+    client.post("/api/logout")
+    assert client.get("/api/me").status_code == 401

@@ -6,18 +6,22 @@ distinct from the operator admin panel. Runs standalone or can be mounted.
 
 from __future__ import annotations
 
+import asyncio
+import hmac
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import (HTMLResponse, JSONResponse, RedirectResponse,
+                               Response)
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from app.config import settings
 from app.interfaces.webapp.auth import (InitDataError, parse_webapp_user,
-                                        verify_init_data)
+                                        session_secret, sign_session,
+                                        verify_init_data, verify_session)
 from app.interfaces.webapp.service import AdventureNotFound, WebappService
 from app.services.dm_image import (
     ImageUnavailable,
@@ -40,28 +44,52 @@ if _STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 
-async def current_user_id(request: Request) -> int:
-    """Resolve the DB user id from verified Telegram initData."""
-    auth = request.headers.get("Authorization", "")
-    if auth.startswith("tma "):
-        init_data = auth[4:]
-    else:
-        init_data = request.headers.get("X-Telegram-Init-Data", "")
+_SESSION_COOKIE = "mira_session"
+
+
+def _session_secret() -> bytes:
+    return session_secret(settings().telegram_bot_token or "")
+
+
+def _set_session_cookie(request: Request, response: Response, uid: int) -> None:
+    """Issue a signed session cookie. Secure when the edge connection is HTTPS
+    (the Cloudflare tunnel sets X-Forwarded-Proto: https)."""
     cfg = settings()
-    try:
-        fields = verify_init_data(
-            init_data,
-            cfg.telegram_bot_token,
-            max_age_seconds=cfg.webapp_initdata_max_age_seconds,
-        )
-        webapp_user = parse_webapp_user(fields)
-    except InitDataError as exc:
-        raise HTTPException(status_code=401, detail=f"invalid initData: {exc}") from exc
-    return service.ensure_user(
-        webapp_user.telegram_user_id,
-        username=webapp_user.username,
-        first_name=webapp_user.first_name,
+    ttl = int(getattr(cfg, "webapp_session_ttl_seconds", 604800))
+    token = sign_session(uid, _session_secret(), ttl_seconds=ttl)
+    secure = (request.headers.get("x-forwarded-proto", "").lower() == "https"
+              or request.url.scheme == "https")
+    response.set_cookie(
+        _SESSION_COOKIE, token, max_age=ttl,
+        httponly=True, secure=secure, samesite="lax", path="/",
     )
+
+
+async def current_user_id(request: Request) -> int:
+    """Resolve the DB user id from verified Telegram initData, or (for browser
+    access outside Telegram) a signed session cookie."""
+    cfg = settings()
+    auth = request.headers.get("Authorization", "")
+    init_data = auth[4:] if auth.startswith("tma ") else request.headers.get("X-Telegram-Init-Data", "")
+    if init_data.strip():
+        try:
+            fields = verify_init_data(
+                init_data,
+                cfg.telegram_bot_token,
+                max_age_seconds=cfg.webapp_initdata_max_age_seconds,
+            )
+            webapp_user = parse_webapp_user(fields)
+            return service.ensure_user(
+                webapp_user.telegram_user_id,
+                username=webapp_user.username,
+                first_name=webapp_user.first_name,
+            )
+        except InitDataError:
+            pass  # fall through to the browser session cookie
+    uid = verify_session(request.cookies.get(_SESSION_COOKIE, ""), _session_secret())
+    if uid is not None:
+        return uid
+    raise HTTPException(status_code=401, detail="not authenticated")
 
 
 class TurnRequest(BaseModel):
@@ -131,6 +159,54 @@ async def index() -> HTMLResponse:
 @app.get("/api/me", response_class=JSONResponse)
 async def api_me(user_id: int = Depends(current_user_id)) -> Dict[str, Any]:
     return {"user_id": user_id}
+
+
+class LoginRequest(BaseModel):
+    token: str
+
+
+@app.get("/api/auth/config", response_class=JSONResponse)
+async def api_auth_config() -> Dict[str, Any]:
+    """Public: whether browser password login is available (no auth required)."""
+    return {"password_enabled": bool(getattr(settings(), "webapp_access_token", None))}
+
+
+@app.post("/api/login", response_class=JSONResponse)
+async def api_login(payload: LoginRequest, request: Request, response: Response) -> Dict[str, Any]:
+    """Browser password login -> session cookie for the ADMIN_USERNAME account."""
+    secret = getattr(settings(), "webapp_access_token", None)
+    if not secret:
+        raise HTTPException(status_code=404, detail="browser login is disabled")
+    if not hmac.compare_digest((payload.token or "").encode(), str(secret).encode()):
+        await asyncio.sleep(0.5)  # small constant delay to slow brute force
+        raise HTTPException(status_code=401, detail="wrong password")
+    uid = service.owner_user_id()
+    if uid is None:
+        raise HTTPException(status_code=500, detail="owner account not found (check ADMIN_USERNAME)")
+    _set_session_cookie(request, response, uid)
+    return {"ok": True}
+
+
+@app.get("/login")
+async def login_magic(request: Request, t: str = "") -> Response:
+    """Per-user magic link from the Telegram bot: verify the signed token, set a
+    session cookie, and redirect into the app."""
+    uid = verify_session(t, _session_secret())
+    if uid is None:
+        return HTMLResponse(
+            "<h3>This link is invalid or has expired.</h3>"
+            "<p>Open the bot in Telegram and use <b>/webapp</b> for a fresh link.</p>",
+            status_code=401,
+        )
+    resp = RedirectResponse(url="/", status_code=302)
+    _set_session_cookie(request, resp, uid)
+    return resp
+
+
+@app.post("/api/logout", response_class=JSONResponse)
+async def api_logout(response: Response) -> Dict[str, Any]:
+    response.delete_cookie(_SESSION_COOKIE, path="/")
+    return {"ok": True}
 
 
 @app.get("/api/image/health", response_class=JSONResponse)

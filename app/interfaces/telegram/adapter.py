@@ -247,6 +247,7 @@ def _build_help_text() -> str:
         "  /adventure reset - Reset current adventure story",
         "  /imagine <description> - Generate an image",
         "  /imagecfg - Set image engine/rating/shot defaults",
+        "  /webapp - Open your adventures in a web browser",
         "  /deletehistory <24h|7d|30d|all> - Erase history",
     ]
     if enabled("user_feedback"):
@@ -552,6 +553,34 @@ class TelegramAdapter:
             return
         self._set_image_config(user_id, cfg)
         await msg.reply_text(f"Set {field} → {value} ✓")
+
+    async def _on_webapp_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Hand out a per-user magic link that opens the web app in a normal
+        browser, signed in as the requester (no password needed)."""
+        msg = update.message
+        if msg is None or update.effective_user is None:
+            return
+        cfg = settings()
+        url = getattr(cfg, "webapp_url", None)
+        if not (getattr(cfg, "webapp_enabled", False) and url):
+            await msg.reply_text("The web app isn't set up right now.")
+            return
+        from app.interfaces.webapp.auth import session_secret, sign_session
+
+        user_id = self._ensure_user(update.effective_user)
+        token = sign_session(
+            user_id, session_secret(cfg.telegram_bot_token or ""), ttl_seconds=600
+        )
+        link = f"{str(url).rstrip('/')}/login?t={token}"
+        keyboard = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("🌐 Open Mira on the web", url=link)]]
+        )
+        await msg.reply_text(
+            "Tap to open your adventures in a browser, signed in as you.\n"
+            "The link works for 10 minutes; it keeps you logged in on that "
+            "browser afterward. Don't share it.",
+            reply_markup=keyboard,
+        )
 
     async def _call_direct_llm(
         self,
@@ -1738,6 +1767,7 @@ class TelegramAdapter:
         app.add_handler(CommandHandler("nsfwpref", self._on_nsfwpref_command))
         app.add_handler(CommandHandler("imagine", self._on_imagine_command))
         app.add_handler(CommandHandler("imagecfg", self._on_imagecfg_command))
+        app.add_handler(CommandHandler("webapp", self._on_webapp_command))
         app.add_handler(CommandHandler("helpmodes", self._on_helpmodes_command))
         app.add_handler(CommandHandler("onboard", self._on_onboard_command))
 

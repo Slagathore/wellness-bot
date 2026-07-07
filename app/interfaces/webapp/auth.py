@@ -77,6 +77,42 @@ def verify_init_data(
     return pairs
 
 
+# ---------------------------------------------------------------------------
+# Signed session tokens — for browser access outside Telegram. The same HMAC
+# scheme backs both the login cookie and the per-user "magic link" the bot hands
+# out, so a token minted by the Telegram side verifies on the webapp side.
+# ---------------------------------------------------------------------------
+
+def session_secret(bot_token: str) -> bytes:
+    """Derive a stable, secret signing key from the bot token."""
+    return hashlib.sha256(("mira-webapp-session|" + (bot_token or "")).encode("utf-8")).digest()
+
+
+def sign_session(uid: int, secret: bytes, *, ttl_seconds: int, now: Optional[float] = None) -> str:
+    """Return a signed ``uid.exp.sig`` token that expires after ttl_seconds."""
+    exp = int((now if now is not None else time.time())) + int(ttl_seconds)
+    payload = f"{int(uid)}.{exp}"
+    sig = hmac.new(secret, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{payload}.{sig}"
+
+
+def verify_session(token: str, secret: bytes, *, now: Optional[float] = None) -> Optional[int]:
+    """Return the uid from a valid, unexpired session token, else None."""
+    if not token:
+        return None
+    try:
+        uid_str, exp_str, sig = token.rsplit(".", 2)
+        expected = hmac.new(secret, f"{uid_str}.{exp_str}".encode("utf-8"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            return None
+        current = now if now is not None else time.time()
+        if int(exp_str) < current:
+            return None
+        return int(uid_str)
+    except (ValueError, AttributeError):
+        return None
+
+
 def parse_webapp_user(verified_fields: Dict[str, Any]) -> WebAppUser:
     """Extract the Telegram user from verified initData fields."""
     user_raw = verified_fields.get("user")

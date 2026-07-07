@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     webapp_host: str = "127.0.0.1"
     webapp_port: int = 8130
     webapp_initdata_max_age_seconds: int = 86400
+    # Optional shared secret for opening the Mini App in a normal desktop browser
+    # (outside Telegram). When set, the webapp shows a login box; a correct token
+    # signs a session cookie mapped to the admin_username's account. Leave unset
+    # to keep the webapp Telegram-only.
+    webapp_access_token: str | None = None
+    webapp_session_ttl_seconds: int = 604800  # 7 days
 
     # Discord
     discord_bot_token: str | None = None
