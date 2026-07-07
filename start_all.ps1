@@ -37,8 +37,25 @@ function Get-WellnessTempRoot {
 }
 
 $adminPort = if ($env:ADMIN_PORT) { $env:ADMIN_PORT } else { "8110" }
-$jobNames = @("OutboxSender", "Embeddings", "Sentiments", "AdminServer")
+$jobNames = @("OutboxSender", "Embeddings", "Sentiments", "AdminServer", "WebApp", "CloudflareTunnel")
 $tempRoot = Get-WellnessTempRoot
+
+# Read a couple of flags straight from .env so this shell can decide whether to
+# launch the Mini App webapp + its Cloudflare tunnel (python loads .env for the
+# app itself; this is just for the launcher's own branching).
+$webappEnabled = $false
+$webappUrl = ""
+$envFile = Join-Path $PWD ".env"
+if (Test-Path $envFile) {
+    foreach ($line in Get-Content $envFile) {
+        if ($line -match '^\s*WEBAPP_ENABLED\s*=\s*(.+)$') {
+            $webappEnabled = ($matches[1].Trim().Trim('"').Trim("'").ToLower() -in @('1', 'true', 'yes', 'on'))
+        }
+        if ($line -match '^\s*WEBAPP_URL\s*=\s*(.+)$') {
+            $webappUrl = $matches[1].Trim().Trim('"').Trim("'")
+        }
+    }
+}
 
 New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
 $env:WELLNESS_TEMP_DIR = $tempRoot
@@ -181,6 +198,44 @@ if (Wait-AdminServer -Port $adminPort -TimeoutSeconds 120) {
     }
     Stop-ServiceJobs
     exit 1
+}
+
+# --- Optional: Telegram Mini App webapp + its Cloudflare tunnel ---------------
+# Only when WEBAPP_ENABLED=true in .env. The webapp serves the Mini App; the
+# tunnel publishes it at WEBAPP_URL (public HTTPS — Telegram requires HTTPS,
+# 127.0.0.1 won't work as a WebApp button).
+if ($webappEnabled) {
+    Write-Host "  [webapp] Mini App server (127.0.0.1:8130)..." -NoNewline
+    Start-ServiceJob -Name "WebApp" -Module "app.interfaces.webapp.server"
+    Start-Sleep 2
+    $waJob = Get-Job -Name "WebApp" -ErrorAction SilentlyContinue
+    if (-not $waJob -or $waJob.State -in @("Completed", "Failed", "Stopped")) {
+        Write-Host " FAILED" -ForegroundColor Red
+        $out = Receive-Job -Name "WebApp" -Keep -ErrorAction SilentlyContinue
+        if ($out) { $out | Select-Object -Last 15 | ForEach-Object { Write-Host "      $_" } }
+    } else {
+        Write-Host " OK" -ForegroundColor Green
+    }
+
+    $cfConfig = Join-Path $PWD "cloudflared.yml"
+    if ((Get-Command cloudflared -ErrorAction SilentlyContinue) -and (Test-Path $cfConfig)) {
+        Write-Host "  [tunnel] Cloudflare Tunnel ($webappUrl)..." -NoNewline
+        Start-Job -Name "CloudflareTunnel" -ScriptBlock {
+            param($cfg)
+            cloudflared tunnel --config $cfg run 2>&1
+        } -ArgumentList $cfConfig | Out-Null
+        Start-Sleep 3
+        $tunJob = Get-Job -Name "CloudflareTunnel" -ErrorAction SilentlyContinue
+        if (-not $tunJob -or $tunJob.State -in @("Completed", "Failed", "Stopped")) {
+            Write-Host " FAILED" -ForegroundColor Red
+            $out = Receive-Job -Name "CloudflareTunnel" -Keep -ErrorAction SilentlyContinue
+            if ($out) { $out | Select-Object -Last 15 | ForEach-Object { Write-Host "      $_" } }
+        } else {
+            Write-Host " OK (connecting)" -ForegroundColor Green
+        }
+    } else {
+        Write-Host "  [tunnel] skipped — cloudflared or cloudflared.yml not found" -ForegroundColor DarkYellow
+    }
 }
 
 Write-Host "`nActive Jobs:" -ForegroundColor Cyan

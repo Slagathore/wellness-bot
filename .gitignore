@@ -3,6 +3,9 @@
 .env.local
 .env.*.local
 *.hash
+# Cloudflare tunnel config — machine-specific creds path + tunnel UUID
+cloudflared.yml
+*.cloudflared.json
 
 # Local Claude Code config — machine-specific paths and permission grants
 .claude/settings.local.json
