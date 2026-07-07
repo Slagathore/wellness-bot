@@ -21,7 +21,14 @@ from app.interfaces.telegram.adapter import TelegramAdapter
         ("Quick Adventure", True),
         ("", True),
         (None, True),
-        # Real, user-meaningful titles must be preserved (never auto-overridden).
+        # The default `Adventure <timestamp>` form must be recognized so the
+        # auto-titler actually replaces it (regression: it used to be missed).
+        ("Adventure 2026-05-03 21:07", True),
+        ("Adventure 2026-06-19 04:21", True),
+        ("Adventure 5", True),
+        # Real, user-meaningful titles must be preserved (never auto-overridden),
+        # including ones that merely start with the word "Adventure".
+        ("Adventure of the Lost Ring", False),
         ("Mansion of Moist Mischief", False),
         ("Old Mother Vane and the Darkness", False),
         ("Sailor Moon at Hogwarts", False),

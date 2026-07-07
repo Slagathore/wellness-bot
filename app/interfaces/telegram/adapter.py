@@ -3019,8 +3019,14 @@ class TelegramAdapter:
     # Adventure message handling (play mode)
     # =========================================================================
 
+    # Matches the auto-generated defaults ("Adventure", "Adventure 5",
+    # "Adventure #12", and the "Adventure 2026-05-03 21:07" timestamp form) plus
+    # other known placeholders — but NOT a real title that merely starts with the
+    # word "Adventure" (e.g. "Adventure of the Lost Ring"), since a non-digit
+    # word after it fails the trailing-$.
     _PLACEHOLDER_TITLE_RE = re.compile(
-        r"^(adventure\s*#?\s*\d*$|adventure with\b|untitled\b|converted adventure$|new adventure$|quick adventure$)",
+        r"^(adventure\s*(?:[#\d][\d\-:\s#]*)?$|adventure with\b|untitled\b"
+        r"|converted adventure$|new adventure$|quick adventure$)",
         re.IGNORECASE,
     )
 
