@@ -313,7 +313,7 @@ def mock_images(monkeypatch):
     import app.interfaces.webapp.server as srv
     import app.interfaces.webapp.service as svc
 
-    async def fake_generate_image(subject, *, style=None, nsfw=False, seed=None):
+    async def fake_generate_image(subject, *, style=None, nsfw=False, seed=None, engine=None, loras=None):
         return b"\x89PNG-" + style.encode() if style else b"\x89PNG"
 
     async def fake_chat_async(messages, model=None, options=None):
@@ -322,11 +322,20 @@ def mock_images(monkeypatch):
     async def fake_health():
         return {"ok": True}
 
+    async def fake_list_engines():
+        return [{"key": "wai", "label": "Anime", "ecosystem": "illustrious",
+                 "present": True, "supports_lora": True, "nsfw_capable": True}]
+
+    async def fake_list_loras(engine):
+        return [{"file": f"{engine}/x.safetensors", "label": "x", "ecosystem": "illustrious"}]
+
     monkeypatch.setattr(svc, "generate_image", fake_generate_image)
     monkeypatch.setattr(svc, "chat_async", fake_chat_async)
     monkeypatch.setattr(svc.WebappService, "_schedule_lore_refresh", lambda self, aid: None)
     monkeypatch.setattr(srv, "is_enabled", lambda: True)
     monkeypatch.setattr(srv, "image_health", fake_health)
+    monkeypatch.setattr(srv, "list_engines", fake_list_engines)
+    monkeypatch.setattr(srv, "list_loras", fake_list_loras)
 
 
 def test_image_health(client, test_user, mock_images):
@@ -360,7 +369,7 @@ def test_scene_image_unavailable_returns_503(client, test_user, mock_images, mon
     import app.interfaces.webapp.service as svc
     from app.services.dm_image import ImageUnavailable
 
-    async def boom(subject, *, style=None, nsfw=False, seed=None):
+    async def boom(subject, *, style=None, nsfw=False, seed=None, engine=None, loras=None):
         raise ImageUnavailable("server down")
 
     monkeypatch.setattr(svc, "generate_image", boom)
@@ -379,8 +388,33 @@ def test_character_portrait_png(client, test_user, mock_images, mock_char):
     db_user_id, telegram_id = test_user
     headers = _auth_header(telegram_id)
     cid = client.post("/api/characters", headers=headers, json={"name": "Seraphina", "description": "x"}).json()["id"]
-    resp = client.post(f"/api/characters/{cid}/image", headers=headers)
+    resp = client.post(f"/api/characters/{cid}/image", headers=headers, json={"engine": "anime", "shot": "portrait"})
     assert resp.status_code == 200 and resp.headers["content-type"] == "image/png"
+
+
+def test_image_health_reports_engines_and_nsfw(client, test_user, mock_images):
+    _db_user_id, telegram_id = test_user
+    body = client.get("/api/image/health", headers=_auth_header(telegram_id)).json()
+    assert body["available"] is True
+    assert "nsfw_allowed" in body
+    assert body["engines"][0]["key"] == "wai"
+
+
+def test_list_engines_endpoint(client, test_user, mock_images):
+    _db_user_id, telegram_id = test_user
+    body = client.get("/api/image/engines", headers=_auth_header(telegram_id)).json()
+    assert body["engines"][0]["supports_lora"] is True
+
+
+def test_list_loras_endpoint(client, test_user, mock_images):
+    _db_user_id, telegram_id = test_user
+    body = client.get("/api/image/loras?engine=wai", headers=_auth_header(telegram_id)).json()
+    assert body["loras"][0]["file"] == "wai/x.safetensors"
+
+
+def test_image_endpoints_require_auth(client):
+    assert client.get("/api/image/engines").status_code == 401
+    assert client.get("/api/image/loras?engine=wai").status_code == 401
 
 
 def test_cannot_access_another_users_adventure(client, test_user):

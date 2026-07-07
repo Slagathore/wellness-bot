@@ -20,7 +20,7 @@ from typing import Any, Dict, List, Optional
 from app.db import db_ro, db_rw
 from app.domain.adventure.lore import (_load_settings, lore_refresh_due,
                                        refresh_adventure_lore)
-from app.services.dm_image import generate_image
+from app.services.dm_image import apply_shot, generate_image, resolve_engine
 from app.utils.ollama import chat_async
 from app.utils.prompt_safety import sanitize_untrusted_text
 
@@ -306,6 +306,10 @@ class WebappService:
         return self.get_memory(db_user_id, adventure_id)
 
     # -- images ------------------------------------------------------------
+    def nsfw_opt_in(self, db_user_id: int) -> bool:
+        """Public: whether this user has opted into NSFW (gates the rating toggle)."""
+        return self._nsfw_opt_in(db_user_id)
+
     def _nsfw_opt_in(self, db_user_id: int) -> bool:
         try:
             from app.runtime.services.preferences import PreferenceService
@@ -345,7 +349,9 @@ class WebappService:
             return sanitize_untrusted_text(text, limit=400)
 
     async def illustrate_scene(
-        self, db_user_id: int, adventure_id: int, *, subject: Optional[str] = None, style: str = "scene"
+        self, db_user_id: int, adventure_id: int, *, subject: Optional[str] = None,
+        style: str = "scene", shot: Optional[str] = None, engine: Optional[str] = None,
+        loras: Optional[list] = None, nsfw: Optional[bool] = None,
     ) -> bytes:
         with db_ro() as conn:
             self._owned_adventure(conn, db_user_id, adventure_id)
@@ -359,10 +365,16 @@ class WebappService:
         prompt = await self._to_image_prompt(db_user_id, subject or "")
         if not prompt:
             raise ValueError("nothing to illustrate yet")
-        return await generate_image(prompt, style=style, nsfw=self._nsfw_opt_in(db_user_id))
+        want_nsfw = self._nsfw_opt_in(db_user_id) and (nsfw is not False)
+        return await generate_image(
+            apply_shot(prompt, shot or style), style=style, nsfw=want_nsfw,
+            engine=resolve_engine(engine, want_nsfw), loras=loras,
+        )
 
     async def character_portrait(
-        self, db_user_id: int, character_id: int, *, style: str = "portrait"
+        self, db_user_id: int, character_id: int, *, style: str = "portrait",
+        shot: Optional[str] = None, engine: Optional[str] = None,
+        loras: Optional[list] = None, nsfw: Optional[bool] = None,
     ) -> bytes:
         with db_ro() as conn:
             if not self._character_accessible(conn, db_user_id, character_id):
@@ -373,8 +385,10 @@ class WebappService:
             ).fetchone()
         subject = f"character portrait of {row['display_name']}. {str(row['system_prompt'] or '')[:400]}"
         prompt = await self._to_image_prompt(db_user_id, subject)
+        want_nsfw = self._nsfw_opt_in(db_user_id) and (nsfw is not False)
         return await generate_image(
-            prompt or subject[:400], style=style, nsfw=self._nsfw_opt_in(db_user_id)
+            apply_shot(prompt or subject[:400], shot or "portrait"), style=style,
+            nsfw=want_nsfw, engine=resolve_engine(engine, want_nsfw), loras=loras,
         )
 
     # -- creation ----------------------------------------------------------

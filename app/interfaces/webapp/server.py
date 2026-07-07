@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
@@ -19,7 +19,15 @@ from app.config import settings
 from app.interfaces.webapp.auth import (InitDataError, parse_webapp_user,
                                         verify_init_data)
 from app.interfaces.webapp.service import AdventureNotFound, WebappService
-from app.services.dm_image import ImageUnavailable, image_health, is_enabled
+from app.services.dm_image import (
+    ImageUnavailable,
+    download_lora,
+    image_health,
+    is_enabled,
+    list_engines,
+    list_loras,
+    search_loras,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +95,24 @@ class MemoryUpdateRequest(BaseModel):
 class ImageRequest(BaseModel):
     subject: Optional[str] = None
     style: Optional[str] = None
+    shot: Optional[str] = None
+    engine: Optional[str] = None
+    nsfw: Optional[bool] = None
+    loras: Optional[List[Dict[str, Any]]] = None
+
+
+class LoraSearchRequest(BaseModel):
+    query: Optional[str] = None
+    engine: str
+    nsfw: bool = True
+    limit: int = 20
+
+
+class LoraDownloadRequest(BaseModel):
+    engine: str
+    version_id: Optional[int] = None
+    url: Optional[str] = None
+    name: Optional[str] = None
 
 
 @app.get("/healthz")
@@ -109,8 +135,44 @@ async def api_me(user_id: int = Depends(current_user_id)) -> Dict[str, Any]:
 
 @app.get("/api/image/health", response_class=JSONResponse)
 async def api_image_health(user_id: int = Depends(current_user_id)) -> Dict[str, Any]:
-    """Whether image generation is available (server enabled + reachable)."""
-    return {"available": bool(is_enabled() and (await image_health()) is not None)}
+    """Image availability + this user's NSFW permission + engine list (one round-trip)."""
+    available = bool(is_enabled() and (await image_health()) is not None)
+    out: Dict[str, Any] = {"available": available, "nsfw_allowed": service.nsfw_opt_in(user_id)}
+    if available:
+        out["engines"] = await list_engines()
+    return out
+
+
+@app.get("/api/image/engines", response_class=JSONResponse)
+async def api_image_engines(user_id: int = Depends(current_user_id)) -> Dict[str, Any]:
+    """Engines available on the DM server (with ecosystem + LoRA-support flags)."""
+    return {"engines": await list_engines()}
+
+
+@app.get("/api/image/loras", response_class=JSONResponse)
+async def api_image_loras(
+    engine: str, user_id: int = Depends(current_user_id)
+) -> Dict[str, Any]:
+    """LoRAs matching the given engine's ecosystem (fresh scan — hot-loads new files)."""
+    return {"loras": await list_loras(engine)}
+
+
+@app.post("/api/image/loras/search", response_class=JSONResponse)
+async def api_image_loras_search(
+    payload: LoraSearchRequest, user_id: int = Depends(current_user_id)
+) -> Dict[str, Any]:
+    return await search_loras(
+        payload.query or "", payload.engine, nsfw=payload.nsfw, limit=payload.limit
+    )
+
+
+@app.post("/api/image/loras/download", response_class=JSONResponse)
+async def api_image_loras_download(
+    payload: LoraDownloadRequest, user_id: int = Depends(current_user_id)
+) -> Dict[str, Any]:
+    return await download_lora(
+        payload.engine, version_id=payload.version_id, url=payload.url, name=payload.name
+    )
 
 
 @app.post("/api/adventures/{adventure_id}/image")
@@ -119,10 +181,11 @@ async def api_scene_image(
     payload: ImageRequest = ImageRequest(),
     user_id: int = Depends(current_user_id),
 ) -> Response:
-    style = payload.style or "scene"
-    subject = payload.subject
     try:
-        png = await service.illustrate_scene(user_id, adventure_id, subject=subject, style=style)
+        png = await service.illustrate_scene(
+            user_id, adventure_id, subject=payload.subject, style=payload.style or "scene",
+            shot=payload.shot, engine=payload.engine, loras=payload.loras, nsfw=payload.nsfw,
+        )
     except AdventureNotFound:
         raise HTTPException(status_code=404, detail="adventure not found")
     except ValueError as exc:
@@ -134,10 +197,15 @@ async def api_scene_image(
 
 @app.post("/api/characters/{character_id}/image")
 async def api_character_image(
-    character_id: int, user_id: int = Depends(current_user_id)
+    character_id: int,
+    payload: ImageRequest = ImageRequest(),
+    user_id: int = Depends(current_user_id),
 ) -> Response:
     try:
-        png = await service.character_portrait(user_id, character_id)
+        png = await service.character_portrait(
+            user_id, character_id, shot=payload.shot, engine=payload.engine,
+            loras=payload.loras, nsfw=payload.nsfw,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except ImageUnavailable as exc:

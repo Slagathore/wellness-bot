@@ -32,7 +32,14 @@ from app.db import db_ro, db_rw
 from app.domain import events
 from app.domain.adventure.lore import refresh_adventure_lore
 from app.domain.conversation.service import UserMessage
-from app.services.dm_image import ImageUnavailable, generate_image, is_enabled
+from app.services.dm_image import (
+    ENGINE_CHOICES,
+    ImageUnavailable,
+    apply_shot,
+    generate_image,
+    is_enabled,
+    resolve_engine,
+)
 from app.domain.safety.resources import CRISIS_RESOURCE_MESSAGE
 from app.domain.turns.audit import append_turn_route, build_route_entry, create_turn_audit
 from app.feature_flags import enabled
@@ -239,6 +246,7 @@ def _build_help_text() -> str:
         "  /adventure info - Show adventure details",
         "  /adventure reset - Reset current adventure story",
         "  /imagine <description> - Generate an image",
+        "  /imagecfg - Set image engine/rating/shot defaults",
         "  /deletehistory <24h|7d|30d|all> - Erase history",
     ]
     if enabled("user_feedback"):
@@ -403,8 +411,12 @@ class TelegramAdapter:
     async def _send_generated_image(
         self, chat_id: int, *, subject: str, nsfw: bool = False,
         style: str | None = None, caption: str | None = None,
+        engine: str | None = None, shot: str | None = None,
     ) -> bool:
-        """Generate one image via the DM server and send it, or report failure."""
+        """Generate one image via the DM server and send it, or report failure.
+
+        `engine` is a friendly choice (auto/realistic/anime/anthro) resolved to a
+        DM model key; `shot` appends framing to the prompt — matching the Mini App."""
         import io
         if not self._application:
             return False
@@ -415,7 +427,10 @@ class TelegramAdapter:
         except Exception:  # noqa: BLE001
             pass
         try:
-            png = await generate_image(subject, style=style, nsfw=nsfw)
+            png = await generate_image(
+                apply_shot(subject, shot), style=style, nsfw=nsfw,
+                engine=resolve_engine(engine, nsfw),
+            )
         except ImageUnavailable as exc:
             await self._application.bot.send_message(
                 chat_id=int(chat_id),
@@ -451,10 +466,92 @@ class TelegramAdapter:
         if user_source is None:
             return
         db_user_id = self._ensure_user(user_source)
+        cfg = self._get_image_config(db_user_id)
+        nsfw = self._nsfw_opt_in(db_user_id) and cfg.get("rating") == "nsfw"
         await self._send_generated_image(
-            msg.chat_id, subject=prompt, nsfw=self._nsfw_opt_in(db_user_id),
+            msg.chat_id, subject=prompt, nsfw=nsfw,
+            engine=cfg.get("engine", "auto"), shot=cfg.get("shot", "scene"),
             caption=f"🎨 {prompt[:180]}",
         )
+
+    _IMAGE_CFG_DEFAULT = {"engine": "auto", "rating": "sfw", "shot": "scene"}
+    _SHOT_CHOICES = ("scene", "portrait", "cinematic")
+
+    def _get_image_config(self, user_id: int) -> dict:
+        """Per-user image defaults (engine/rating/shot) used by /imagine."""
+        cfg = dict(self._IMAGE_CFG_DEFAULT)
+        try:
+            with db_ro() as conn:
+                row = conn.execute(
+                    "SELECT value FROM profile_context WHERE user_id = ? AND key = 'image_config'",
+                    (user_id,),
+                ).fetchone()
+            if row and row["value"]:
+                stored = self._safe_json_loads(row["value"], {}, context="image config")
+                if isinstance(stored, dict):
+                    cfg.update({k: stored[k] for k in self._IMAGE_CFG_DEFAULT if k in stored})
+        except Exception:  # noqa: BLE001
+            pass
+        return cfg
+
+    def _set_image_config(self, user_id: int, cfg: dict) -> None:
+        with db_rw() as conn:
+            conn.execute(
+                """
+                INSERT INTO profile_context (user_id, key, value, updated_at)
+                VALUES (?, 'image_config', ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(user_id, key)
+                DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP
+                """,
+                (user_id, json.dumps(cfg)),
+            )
+
+    async def _on_imagecfg_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Set the defaults /imagine uses: engine, rating, shot. (LoRA stacking is
+        Mini App only.)"""
+        msg = update.message
+        if msg is None or update.effective_user is None:
+            return
+        user_id = self._ensure_user(update.effective_user)
+        cfg = self._get_image_config(user_id)
+        args = [str(a).strip().lower() for a in (getattr(context, "args", []) or [])]
+
+        def _summary() -> str:
+            return (
+                "🎨 *Image defaults* (used by /imagine):\n"
+                f"• Engine: `{cfg['engine']}`\n"
+                f"• Rating: `{cfg['rating']}`\n"
+                f"• Shot: `{cfg['shot']}`\n\n"
+                "Change with:\n"
+                "`/imagecfg engine auto|realistic|anime|anthro`\n"
+                "`/imagecfg rating sfw|nsfw`\n"
+                "`/imagecfg shot scene|portrait|cinematic`\n"
+                "`/imagecfg reset`\n"
+                "_LoRA stacking & Civitai search live in the Mini App._"
+            )
+
+        if not args:
+            await msg.reply_text(_summary(), parse_mode="Markdown")
+            return
+        field, value = args[0], (args[1] if len(args) > 1 else "")
+        if field == "reset":
+            self._set_image_config(user_id, dict(self._IMAGE_CFG_DEFAULT))
+            await msg.reply_text("Image defaults reset.")
+            return
+        if field == "engine" and value in ENGINE_CHOICES:
+            cfg["engine"] = value
+        elif field == "rating" and value in ("sfw", "nsfw"):
+            if value == "nsfw" and not self._nsfw_opt_in(user_id):
+                await msg.reply_text("NSFW is locked. Enable it first with /nsfwpref enable.")
+                return
+            cfg["rating"] = value
+        elif field == "shot" and value in self._SHOT_CHOICES:
+            cfg["shot"] = value
+        else:
+            await msg.reply_text(_summary(), parse_mode="Markdown")
+            return
+        self._set_image_config(user_id, cfg)
+        await msg.reply_text(f"Set {field} → {value} ✓")
 
     async def _call_direct_llm(
         self,
@@ -1640,6 +1737,7 @@ class TelegramAdapter:
         app.add_handler(CommandHandler("adventure", self._on_adventure_command))
         app.add_handler(CommandHandler("nsfwpref", self._on_nsfwpref_command))
         app.add_handler(CommandHandler("imagine", self._on_imagine_command))
+        app.add_handler(CommandHandler("imagecfg", self._on_imagecfg_command))
         app.add_handler(CommandHandler("helpmodes", self._on_helpmodes_command))
         app.add_handler(CommandHandler("onboard", self._on_onboard_command))
 
@@ -5095,9 +5193,11 @@ class TelegramAdapter:
                 await query.message.reply_text("There's no scene to illustrate yet — play a turn first.")
                 return
             prompt = await self._distill_image_prompt(user_id, scene)
+            cfg = self._get_image_config(user_id)
             await self._send_generated_image(
                 query.message.chat_id, subject=prompt,
-                nsfw=self._nsfw_opt_in(user_id), style="scene",
+                nsfw=self._nsfw_opt_in(user_id) and cfg.get("rating") == "nsfw",
+                style="scene", engine=cfg.get("engine", "auto"), shot=cfg.get("shot", "scene"),
             )
             return
 
