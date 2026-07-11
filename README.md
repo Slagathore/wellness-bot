@@ -1,24 +1,20 @@
-# Mira — Wellness Bot
+# Mira, a self-hosted wellness bot
 
-A self-hosted, multi-platform AI wellness companion built on Telegram (and optionally Discord). Mira runs entirely on your own infrastructure using local LLMs via [Ollama](https://ollama.com), with no mandatory cloud dependencies.
+Mira is an AI wellness companion you run yourself. It talks over Telegram, and optionally Discord, and does its thinking with local LLMs through [Ollama](https://ollama.com). Nothing has to touch a cloud service unless you decide it should.
 
----
+## What it does
 
-## Features
-
-- **Conversational wellness support** — context-aware chat with persistent memory across sessions
-- **Personality modes** — Professional, Friendly, Creative, Therapeutic, Work Focus, Roleplay, and more; switchable per-user
-- **Custom characters** — import or create custom AI personas stored in the database
-- **Psychological profiling** — passive sentiment tracking and psych-profile generation from conversations
-- **Proactive reminders** — the bot sets and delivers follow-up reminders based on conversation context
-- **Nightly analytics** — background worker summarizes daily sentiment trends
-- **Semantic memory (RAG)** — past conversations are embedded and retrieved for long-term context
-- **Image generation** — optional, via the standalone DungeonMaster SDXL server (per-engine recipes + LoRA stacking)
-- **Admin web GUI** — FastAPI-powered moderation panel with user management, broadcast, and LLM console
-- **Discord integration** — optional Discord bot running alongside Telegram
-- **Adaptive psych tests** — in-chat personality assessments that refine the user profile
-
----
+- Holds a real conversation and remembers it. Context and memory persist across sessions, not just within one chat.
+- Ships several personality modes (Professional, Friendly, Creative, Therapeutic, Work Focus, Roleplay, and more). Each user picks their own.
+- Lets you import or build custom personas, stored in the database.
+- Tracks sentiment quietly in the background and builds a psych profile from the conversations over time.
+- Sets and delivers its own follow up reminders based on what you talked about.
+- Runs a nightly worker that summarizes the day's sentiment trends.
+- Uses semantic memory (RAG): older conversations get embedded and pulled back in when they are relevant.
+- Can generate images, if you want it, through the standalone DungeonMaster SDXL server (per engine recipes plus LoRA stacking).
+- Comes with an admin web panel (FastAPI) for user management, broadcasts, and an LLM console.
+- Runs a Discord bot alongside Telegram if you turn it on.
+- Includes adaptive in chat psych tests that feed back into the user profile.
 
 ## Architecture
 
@@ -31,7 +27,7 @@ A self-hosted, multi-platform AI wellness companion built on Telegram (and optio
                        ▼
 ┌──────────────────────────────────────────────────────┐
 │              Orchestrator / Pipeline                 │
-│   (app/orchestrator/)  —  context builder, prompt    │
+│   (app/orchestrator/)  -  context builder, prompt    │
 │   builder, persona runtime, pipeline dispatch        │
 └──────┬─────────────────────────────────┬────────────┘
        │                                 │
@@ -57,16 +53,14 @@ A self-hosted, multi-platform AI wellness companion built on Telegram (and optio
 | --- | --- |
 | `app/orchestrator/` | Prompt assembly, persona resolution, LLM dispatch |
 | `app/domain/` | Core business logic (conversation, reminders, turns) |
-| `app/personality/` | Personality mode definitions and per-user switching |
+| `app/personality/` | Personality mode definitions and per user switching |
 | `app/workers/` | Background jobs (sentiment, nightly, reminders) |
-| `app/features/` | Opt-in feature modules (NSFW prefs, psych tests, Discord, …) |
-| `app/rag/` | Semantic memory — embedding, retrieval, vector store |
+| `app/features/` | Opt in feature modules (NSFW prefs, psych tests, Discord, and so on) |
+| `app/rag/` | Semantic memory: embedding, retrieval, vector store |
 | `app/interfaces/` | Telegram adapter, admin HTTP server |
 | `app/infra/` | DB layer, schema bootstrap, file storage |
 | `scripts/` | Bootstrap, migration, import helpers |
 | `docs/` | Architecture decisions, runbooks, setup guides |
-
----
 
 ## Prerequisites
 
@@ -76,7 +70,7 @@ A self-hosted, multi-platform AI wellness companion built on Telegram (and optio
 | [Ollama](https://ollama.com) | Local LLM inference; pull a model before starting |
 | Telegram bot token | Create a bot via [@BotFather](https://t.me/BotFather) |
 
-> **Note:** the event bus is in-process (`asyncio`, see [`app/core/events.py`](app/core/events.py)); Redis is **not** required to run the bot. `redis` is pinned in `requirements.txt` and `REDIS_URL` exists as a reserved setting, but nothing in `app/` currently connects to Redis.
+The event bus runs in the same process (`asyncio`, see [`app/core/events.py`](app/core/events.py)), so Redis is not required. `redis` is pinned in `requirements.txt` and `REDIS_URL` exists as a reserved setting, but nothing in `app/` currently connects to Redis.
 
 **Minimal Ollama setup:**
 
@@ -85,9 +79,7 @@ ollama pull llama3          # or any model you prefer
 ollama pull nomic-embed-text  # embedding model (required for RAG)
 ```
 
----
-
-## Quick Start
+## Quick start
 
 ```bash
 # 1. Clone
@@ -103,7 +95,7 @@ pip install -r requirements.txt
 
 # 4. Configure
 cp .env.example .env
-# Edit .env — at minimum set TELEGRAM_BOT_TOKEN, ADMIN_USERNAME, ADMIN_PASSWORD
+# Edit .env, at minimum set TELEGRAM_BOT_TOKEN, ADMIN_USERNAME, ADMIN_PASSWORD
 
 # 5. Bootstrap the database and data directories
 python scripts/bootstrap.py --ensure-dirs --init-db --init-vector
@@ -112,75 +104,61 @@ python scripts/bootstrap.py --ensure-dirs --init-db --init-vector
 python -m app.main_modular
 ```
 
-The bot is now polling Telegram. Open a chat with your bot and send `/start`.
+The bot is now polling Telegram. Open a chat with it and send `/start`.
 
-The admin web panel is available at `http://localhost:8110/admin` (port configurable via uvicorn args).
-
----
+The admin web panel lives at `http://localhost:8110/admin` (port is configurable via uvicorn args).
 
 ## Configuration
 
-All configuration is via environment variables loaded from `.env`. See [`.env.example`](.env.example) for the full reference with descriptions.
+Everything is configured through environment variables loaded from `.env`. See [`.env.example`](.env.example) for the full reference with descriptions.
 
-**Essential variables:**
+**The variables you actually need:**
 
 | Variable | Description |
 | --- | --- |
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
-| `ADMIN_USERNAME` | Your Telegram username — grants admin panel access |
+| `ADMIN_USERNAME` | Your Telegram username, grants admin panel access |
 | `ADMIN_PASSWORD` | Admin panel login password |
 | `DATA_ROOT` | Directory where all user data and databases are stored |
 | `DATABASE_PATH` | Full path to the SQLite database file |
 | `CHAT_MODEL` | Ollama model for conversations (e.g. `llama3:latest`) |
 | `EMBED_MODEL` | Ollama embedding model (e.g. `nomic-embed-text`) |
-| `REDIS_URL` | Reserved; not currently used (the event bus is in-process). |
+| `REDIS_URL` | Reserved, not currently used (the event bus runs in process). |
 
-**Feature flags** are controlled via the `APP_FEATURE_FLAGS` JSON variable. Set a key to `false` to disable a feature without removing code.
+Feature flags live in the `APP_FEATURE_FLAGS` JSON variable. Set a key to `false` to switch a feature off without touching the code.
 
----
+## Personality modes
 
-## Personality Modes
+Modes are defined in [`app/personality/modes.py`](app/personality/modes.py). Each one carries its own system prompt, temperature, and feature flags (for example whether reminders or psych profiling are on).
 
-Modes are defined in [`app/personality/modes.py`](app/personality/modes.py). Each mode has its own system prompt, temperature, and feature flags (e.g. whether reminders or psych-profiling are active).
+Built in modes: `professional`, `friendly`, `creative`, `therapeutic`, `workfocus`, `roleplay`, `downbad`.
 
-Built-in modes: `professional`, `friendly`, `creative`, `therapeutic`, `workfocus`, `roleplay`, `downbad`.
+Heads up: `downbad` mode enables explicit adult content. It sits behind a per user NSFW opt in and is off by default. Set `"nsfw_preferences": false` in `APP_FEATURE_FLAGS` to kill it entirely.
 
-> **Content note:** `downbad` mode enables explicit adult content. It is gated behind a per-user NSFW opt-in and is off by default. Set `"nsfw_preferences": false` in `APP_FEATURE_FLAGS` to disable it entirely.
+Users switch modes with in chat commands. Admins can override any user from the admin panel.
 
-Users switch modes via in-chat commands; admins can override per-user via the admin panel.
-
----
-
-## Discord Integration
+## Discord integration
 
 1. Create an application at [discord.com/developers](https://discord.com/developers/applications)
 2. Add `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, and `DISCORD_PUBLIC_KEY` to `.env`
 3. Set `"discord_bot": true` in `APP_FEATURE_FLAGS`
 4. See [`docs/DISCORD_BOT_SETUP_GUIDE.md`](docs/DISCORD_BOT_SETUP_GUIDE.md) for slash command registration and invite links
 
----
+## Image generation (optional)
 
-## Image Generation (Optional)
+Image generation is handled by the standalone DungeonMaster SDXL server (`python dm_imagegen.py --serve`, default `127.0.0.1:8500`). The bot POSTs a prompt and gets a PNG back. No torch or diffusers run in this process, so startup stays light.
 
-All image generation is delegated to the standalone **DungeonMaster SDXL server**
-(`python dm_imagegen.py --serve`, default `127.0.0.1:8500`). The bot POSTs a prompt
-and gets a PNG back — no torch/diffusers run in this process, so startup stays light.
+- Point the bot at it with `DM_IMAGE_URL` (default `http://127.0.0.1:8500`) and toggle it with `DM_IMAGE_ENABLED`.
+- Recipes route by style and rating (realism goes to jugg/lustify, anime to wai, anthro to pony) with matching LoRA stacking.
+- If the server is not running, image buttons hide and `/imagine` says so. Nothing else breaks.
 
-- Point the bot at it with `DM_IMAGE_URL` (default `http://127.0.0.1:8500`); toggle with `DM_IMAGE_ENABLED`.
-- Per-engine recipes route by style/rating (realism → jugg/lustify, anime → wai, anthro → pony) with ecosystem-matched LoRA stacking.
-- If the server isn't running, image buttons hide and `/imagine` reports it gracefully — nothing else is affected.
+## Running as a service (Windows)
 
----
+See [`docs/windows_services.md`](docs/windows_services.md) for Task Scheduler entries that start the main bot and background workers on boot.
 
-## Running as a Service (Windows)
-
-See [`docs/windows_services.md`](docs/windows_services.md) for creating Task Scheduler entries to run the main bot and background workers on startup.
-
-## Running as a Service (Linux / systemd)
+## Running as a service (Linux / systemd)
 
 See the `systemd/` directory for service unit templates.
-
----
 
 ## Development
 
@@ -201,9 +179,7 @@ python -m app.workers.sentiments
 
 See [`docs/testing.md`](docs/testing.md) for the full test matrix and acceptance criteria.
 
----
-
-## Project Layout
+## Project layout
 
 ```text
 wellness-bot/
@@ -226,24 +202,18 @@ wellness-bot/
 └── requirements.txt
 ```
 
----
+## Security notes
 
-## Security Notes
-
-- **Never commit `.env`** — it contains live credentials. It is gitignored by default.
-- The `wellness_data/` directory contains user PII (conversations, profiles). It is gitignored.
-- `ENABLE_DANGEROUS_TOOLS`, `ADMIN_DB_EDIT_ENABLED`, `ADMIN_LLM_CONSOLE_ENABLED`, and `ADMIN_OMNI_BROADCAST_ENABLED` default to `false`. Only enable them in controlled environments.
-- **Admin web panel auth:** the FastAPI admin server (`app/interfaces/admin/server.py`) authenticates via HTTP Basic against `ADMIN_USERNAME`/`ADMIN_PASSWORD`, compared **in plaintext** — so keep `.env` secret, and run the panel on loopback (the default is now `127.0.0.1`) behind a TLS reverse proxy if it must be remote. The salted-hash `AdminAuth` in `app/utils/security.py` (SHA-256, not bcrypt) currently guards only the desktop Tk control panel, not the web panel.
-- See [`docs/secrets.md`](docs/secrets.md) for credential rotation procedures.
-
----
+- Never commit `.env`. It holds live credentials and is gitignored by default.
+- The `wellness_data/` directory holds user PII (conversations, profiles). It is gitignored.
+- `ENABLE_DANGEROUS_TOOLS`, `ADMIN_DB_EDIT_ENABLED`, `ADMIN_LLM_CONSOLE_ENABLED`, and `ADMIN_OMNI_BROADCAST_ENABLED` all default to `false`. Only turn them on in environments you control.
+- Admin web panel auth: the FastAPI admin server (`app/interfaces/admin/server.py`) uses HTTP Basic against `ADMIN_USERNAME` and `ADMIN_PASSWORD`, compared in plaintext. Keep `.env` secret, and run the panel on loopback (the default is now `127.0.0.1`) behind a TLS reverse proxy if it has to be reachable remotely. The salted hash `AdminAuth` in `app/utils/security.py` (SHA-256, not bcrypt) currently guards only the desktop Tk control panel, not the web panel.
+- See [`docs/secrets.md`](docs/secrets.md) for credential rotation.
 
 ## Contributing
 
-Pull requests welcome. Please run `ruff check` and `mypy` before submitting. For larger changes, open an issue first to discuss the approach.
-
----
+If you want to send a patch, run `ruff check` and `mypy` first. For anything bigger than a small fix, open an issue so we can talk through the approach before you write it.
 
 ## License
 
-MIT — see `LICENSE` if present, otherwise contact the repository owner.
+MIT. See `LICENSE` if present, otherwise contact the repository owner.
