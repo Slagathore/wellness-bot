@@ -7,9 +7,9 @@
 cloudflared.yml
 *.cloudflared.json
 
-# Local Claude Code config — machine-specific paths and permission grants
-.claude/settings.local.json
-.claude/*.local.json
+# AI assistant config and instructions (kept local, never tracked)
+.claude/
+AGENTS.md
 
 # Python
 __pycache__/
