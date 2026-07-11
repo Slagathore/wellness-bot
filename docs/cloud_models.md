@@ -10,8 +10,9 @@ Ollama hosts these models for **free** on `cloud.ollama.com`. Just use the model
 | --------------- | ------------------------------- | ----------------------------- | ---------- | ---------- |
 | `gpt-oss`       | OpenAI's open-weight GPT models | Reasoning, agentic tasks      | 3.3M       | 20B-120B   |
 | `deepseek-v3.1` | DeepSeek's thinking model       | Complex reasoning, coding     | Large      | 671B       |
-| `qwen3-coder`   | Alibaba's coding specialist     | Code generation, long context | Very large | 30B-480B   |
+| `qwen3-coder-next` | Alibaba's coding specialist  | Code generation, long context | Very large | MoE        |
 | `kimi-k2`       | Mixture-of-experts (MoE) model  | Coding agents, benchmarks     | Large      | MoE        |
+| `kimi-k2.7-code` | Kimi coding model (thinking)   | Coding, general tasks         | Large      | MoE        |
 
 **How to use (no setup required!):**
 
@@ -22,7 +23,7 @@ Ollama hosts these models for **free** on `cloud.ollama.com`. Just use the model
 **Recommended FREE cloud models:**
 
 - **Best for Psych Profiling:** `deepseek-v3.1` (has thinking mode!)
-- **Best for Coding Help:** `qwen3-coder:480b` (huge context window)
+- **Best for Coding Help:** `kimi-k2.7-code:cloud` (thinking-capable, house default)
 - **Best All-Around:** `gpt-oss:120b` (largest variant)
 - **Fastest FREE:** `kimi-k2` (optimized MoE architecture)
 
@@ -40,8 +41,8 @@ Many models have different size variants. Use tags to specify:
 
 - `gpt-oss:20b` - 20 billion parameters (faster)
 - `gpt-oss:120b` - 120 billion parameters (smarter)
-- `qwen3-coder:30b` - 30B version
-- `qwen3-coder:480b` - 480B version (massive!)
+- `qwen3-coder:30b` - 30B version (local)
+- `kimi-k2.7-code:cloud` - cloud version of Kimi's coding model
 
 If no tag specified, Ollama uses the default variant.
 

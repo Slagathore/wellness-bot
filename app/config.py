@@ -59,8 +59,14 @@ class Settings(BaseSettings):
     # Backward-compatible alias for older env/config keys.
     turn_planner_model: str | None = None
     # Dedicated model for nightly reprocessing and batch profile analysis.
-    nightly_model: str | None = "gemini-3-flash-preview:cloud"
+    nightly_model: str | None = "kimi-k2.7-code:cloud"
     turn_planner_timeout_seconds: float = 8.0
+    # Thinking (reasoning) control for thinking-capable models such as
+    # kimi-k2.7-code: False | True | "low" | "medium" | "high".
+    llm_think: bool | str = False
+    # Expose the model's reasoning (message.thinking) in responses. Keep False
+    # to never mix thinking into displayed or stored content.
+    show_thinking: bool = False
 
     # HuggingFace (optional - diffusers also auto-reads ~/.cache/huggingface/token)
     hf_token: str | None = None
