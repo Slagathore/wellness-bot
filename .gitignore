@@ -10,6 +10,7 @@ cloudflared.yml
 # AI assistant config and instructions (kept local, never tracked)
 .claude/
 AGENTS.md
+CLAUDE.md
 
 # Python
 __pycache__/
