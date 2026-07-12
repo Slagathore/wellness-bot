@@ -12,6 +12,20 @@ class Settings(BaseSettings):
     # Telegram
     telegram_bot_token: str
 
+    # Roleplay/adventure Mini App (Telegram WebApp). Disabled by default; set a
+    # public HTTPS URL and enable to surface a "Play in App" button.
+    webapp_enabled: bool = False
+    webapp_url: str | None = None
+    webapp_host: str = "127.0.0.1"
+    webapp_port: int = 8130
+    webapp_initdata_max_age_seconds: int = 86400
+    # Optional shared secret for opening the Mini App in a normal desktop browser
+    # (outside Telegram). When set, the webapp shows a login box; a correct token
+    # signs a session cookie mapped to the admin_username's account. Leave unset
+    # to keep the webapp Telegram-only.
+    webapp_access_token: str | None = None
+    webapp_session_ttl_seconds: int = 604800  # 7 days
+
     # Discord
     discord_bot_token: str | None = None
 
@@ -45,31 +59,23 @@ class Settings(BaseSettings):
     # Backward-compatible alias for older env/config keys.
     turn_planner_model: str | None = None
     # Dedicated model for nightly reprocessing and batch profile analysis.
-    nightly_model: str | None = "gemini-3-flash-preview:cloud"
+    nightly_model: str | None = "kimi-k2.7-code:cloud"
     turn_planner_timeout_seconds: float = 8.0
+    # Thinking (reasoning) control for thinking-capable models such as
+    # kimi-k2.7-code: False | True | "low" | "medium" | "high".
+    llm_think: bool | str = False
+    # Expose the model's reasoning (message.thinking) in responses. Keep False
+    # to never mix thinking into displayed or stored content.
+    show_thinking: bool = False
 
     # HuggingFace (optional - diffusers also auto-reads ~/.cache/huggingface/token)
     hf_token: str | None = None
 
-    # External image backends
-    flux2_klein_url: str = "http://127.0.0.1:7860"
-    flux2_klein_host: str = "0.0.0.0"
-    flux2_klein_port: int = 7860
-    flux2_klein_timeout_seconds: float = 900.0
-    flux2_klein_gguf_path: str = ""
-    flux2_klein_base_repo: str = "black-forest-labs/FLUX.2-klein-9B"
-    flux2_klein_use_torch_compile: bool = False
-    media_use_torch_compile: bool = False
-    easy_diffusion_url: str = "http://127.0.0.1:9000"
-    easy_diffusion_model: str | None = None
-    easy_diffusion_vae_model: str | None = None
-    easy_diffusion_sampler: str | None = None
-    easy_diffusion_vram_usage_level: str = "balanced"
-    easy_diffusion_timeout_seconds: float = 900.0
-    perchance_timeout_seconds: float = 180.0
-    perchance_use_persistent_profile: bool = True
-    perchance_other_url: str = "https://perchance.org/imageapi"
-    perchance_other_timeout_seconds: float = 90.0
+    # Image generation via the DungeonMaster SDXL backend (standalone server;
+    # run `python dm_imagegen.py --serve`). This is the only image path used.
+    dm_image_url: str = "http://127.0.0.1:8500"
+    dm_image_enabled: bool = True
+    dm_image_timeout_seconds: float = 300.0
 
     # Filesystem
     data_root: str = "/data/telegram_wellness_bot"

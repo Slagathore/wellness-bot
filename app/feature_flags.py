@@ -32,7 +32,6 @@ _DEFAULT_FLAGS: Dict[str, bool] = {
     "conversation_memory_v2": True,
     "web_search_v2": False,
     "discord_bot": True,
-    "plaintext_media_generation": True,
     "llm_continuation_on_truncation": True,
     "llm_turn_planner_shadow": False,
     "llm_turn_planner_v1": False,

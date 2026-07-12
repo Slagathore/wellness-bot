@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Adventures</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root {
+      --bg: var(--tg-theme-bg-color, #0f1117);
+      --sec-bg: var(--tg-theme-secondary-bg-color, #171a21);
+      --text: var(--tg-theme-text-color, #e7e3d8);
+      --hint: var(--tg-theme-hint-color, #8b91a0);
+      --link: var(--tg-theme-link-color, #6ea8fe);
+      --btn: var(--tg-theme-button-color, #6d5dfc);
+      --btn-text: var(--tg-theme-button-text-color, #ffffff);
+      --accent: var(--tg-theme-link-color, #d8a657);
+      --border: rgba(139, 145, 160, 0.18);
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      background: var(--bg); color: var(--text);
+      font-family: -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 15px;
+      display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+    }
+    header {
+      padding: 12px 16px; font-weight: 700; font-size: 16px; flex: 0 0 auto;
+      border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px;
+    }
+    header .back { color: var(--link); cursor: pointer; font-weight: 500; display: none; }
+    header .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    header .newbtn { color: var(--link); cursor: pointer; font-weight: 600; font-size: 14px; white-space: nowrap; }
+    header .newbtn.hidden { display: none; }
+    main { flex: 1 1 auto; overflow-y: auto; }
+    .hint { color: var(--hint); }
+    .empty { text-align: center; color: var(--hint); padding: 48px 22px; line-height: 1.6; }
+
+    /* ---- Adventure list ---- */
+    .list { padding: 12px 14px; }
+    .adv {
+      background: var(--sec-bg); border: 1px solid var(--border); border-radius: 12px;
+      padding: 14px; margin-bottom: 10px; cursor: pointer; transition: transform .05s ease;
+    }
+    .adv:active { transform: scale(0.99); }
+    .adv .t { font-weight: 600; margin-bottom: 5px; }
+    .adv .m { color: var(--hint); font-size: 12px; }
+    .badge { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: rgba(110,168,254,.14); color: var(--link); text-transform: capitalize; }
+    .badge.completed { background: rgba(139,145,160,.14); color: var(--hint); }
+    .pager { display: flex; gap: 8px; justify-content: center; align-items: center; margin: 10px 0 4px; }
+    .pager button { background: var(--sec-bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px 14px; }
+    .pager button:disabled { opacity: .4; }
+
+    /* ---- Story (AI-Dungeon style continuous prose) ---- */
+    .story {
+      padding: 18px 18px 8px; font-family: Georgia, "Iowan Old Style", "Times New Roman", serif;
+      font-size: 17px; line-height: 1.72; max-width: 720px; margin: 0 auto;
+    }
+    .story p { margin: 0 0 2px; white-space: pre-wrap; }
+    .story .narrator { color: var(--text); }
+    .story .action { color: var(--accent); font-style: italic; }  /* player Do/Say */
+    .story .action::before { content: "\203A  "; opacity: .6; font-style: normal; }
+    .story .authored { color: var(--text); opacity: .92; }         /* player Story */
+    .typing { color: var(--hint); font-style: italic; padding: 4px 2px 10px; }
+    .scene-img { display: block; max-width: 100%; border-radius: 12px; margin: 14px auto 8px; border: 1px solid var(--border); }
+    .portrait-img { display: block; max-width: 220px; border-radius: 10px; margin: 8px 2px 2px; border: 1px solid var(--border); }
+
+    /* ---- Composer ---- */
+    .dock { flex: 0 0 auto; border-top: 1px solid var(--border); background: var(--bg); padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); }
+    .actions { display: flex; gap: 8px; margin-bottom: 8px; }
+    .actions button {
+      flex: 1; background: transparent; color: var(--hint); border: 1px solid var(--border);
+      border-radius: 9px; padding: 7px 4px; font-size: 12.5px; font-weight: 600;
+    }
+    .actions button:active { background: var(--sec-bg); }
+    .actions button:disabled { opacity: .4; }
+    .modes { display: flex; gap: 4px; background: var(--sec-bg); border: 1px solid var(--border); border-radius: 10px; padding: 3px; margin-bottom: 8px; }
+    .modes button { flex: 1; background: transparent; color: var(--hint); border: none; border-radius: 7px; padding: 7px 4px; font-weight: 600; font-size: 13px; }
+    .modes button.on { background: var(--btn); color: var(--btn-text); }
+    .composer { display: flex; gap: 8px; align-items: flex-end; }
+    .composer textarea {
+      flex: 1; resize: none; border: 1px solid var(--border); border-radius: 16px;
+      padding: 10px 14px; background: var(--sec-bg); color: var(--text); font: inherit; max-height: 120px;
+    }
+    .composer button {
+      border: none; border-radius: 16px; background: var(--btn); color: var(--btn-text);
+      padding: 0 18px; height: 42px; font-weight: 600; min-width: 66px;
+    }
+    .composer button:disabled { opacity: .5; }
+    .hidden { display: none !important; }
+
+    /* ---- Create form ---- */
+    .create { padding: 16px 16px 28px; max-width: 560px; margin: 0 auto; }
+    .create label { display: block; font-size: 12.5px; color: var(--hint); font-weight: 600; margin: 14px 2px 6px; text-transform: uppercase; letter-spacing: .3px; }
+    .create input, .create textarea {
+      width: 100%; border: 1px solid var(--border); border-radius: 11px; background: var(--sec-bg);
+      color: var(--text); font: inherit; padding: 11px 13px; resize: vertical;
+    }
+    .create .go {
+      width: 100%; margin-top: 20px; border: none; border-radius: 13px; background: var(--btn);
+      color: var(--btn-text); font-weight: 700; font-size: 15px; padding: 13px; cursor: pointer;
+    }
+    .create .go:disabled { opacity: .55; }
+    .create .status { margin-top: 12px; text-align: center; color: var(--hint); font-size: 13px; min-height: 18px; }
+    .create .cast { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+    .chip {
+      display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 999px;
+      border: 1px solid var(--border); background: var(--sec-bg); color: var(--text); cursor: pointer; font-size: 13.5px;
+    }
+    .chip.on { border-color: var(--btn); background: rgba(109,93,252,.16); color: var(--text); }
+
+    /* ---- Bottom-sheet panel (Memory / Characters) ---- */
+    header .menu { color: var(--link); cursor: pointer; font-size: 20px; line-height: 1; padding: 0 2px; display: none; }
+    header .menu.show { display: inline; }
+    .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 50; display: flex; align-items: flex-end; }
+    .overlay.hidden { display: none; }
+    .sheet {
+      width: 100%; max-height: 88vh; background: var(--bg); border-top-left-radius: 18px; border-top-right-radius: 18px;
+      border-top: 1px solid var(--border); display: flex; flex-direction: column; animation: rise .2s ease;
+    }
+    @keyframes rise { from { transform: translateY(24px); opacity: .6; } to { transform: none; opacity: 1; } }
+    .sheet-head { display: flex; align-items: center; padding: 14px 16px 8px; font-weight: 700; }
+    .sheet-head .grow { flex: 1; }
+    .sheet-close { cursor: pointer; color: var(--hint); font-size: 18px; }
+    .tabs { display: flex; gap: 4px; padding: 0 12px; background: var(--sec-bg); margin: 0 12px; border-radius: 10px; padding: 3px; }
+    .tabs button { flex: 1; background: transparent; color: var(--hint); border: none; border-radius: 7px; padding: 8px; font-weight: 600; }
+    .tabs button.on { background: var(--btn); color: var(--btn-text); }
+    .sheet-body { overflow-y: auto; padding: 14px 16px calc(20px + env(safe-area-inset-bottom)); }
+    .sheet-body label { display: block; font-size: 12px; color: var(--hint); font-weight: 600; text-transform: uppercase; letter-spacing: .3px; margin: 14px 2px 6px; }
+    .sheet-body textarea, .sheet-body input {
+      width: 100%; border: 1px solid var(--border); border-radius: 10px; background: var(--sec-bg);
+      color: var(--text); font: inherit; padding: 10px 12px; resize: vertical;
+    }
+    .sheet-body .primary { width: 100%; margin-top: 16px; border: none; border-radius: 11px; background: var(--btn); color: var(--btn-text); font-weight: 700; padding: 12px; }
+    .sheet-body .primary:disabled { opacity: .55; }
+    .row { display: flex; align-items: center; gap: 10px; padding: 10px 2px; border-bottom: 1px solid var(--border); }
+    .row .grow { flex: 1; }
+    .row .x { color: var(--hint); cursor: pointer; font-size: 16px; padding: 4px 8px; }
+    .muted { color: var(--hint); font-size: 13px; }
+    .divider { height: 1px; background: var(--border); margin: 18px 0 4px; }
+
+    /* ---- Image settings panel ---- */
+    .seg { display: flex; gap: 4px; background: var(--sec-bg); border: 1px solid var(--border); border-radius: 10px; padding: 3px; flex-wrap: wrap; }
+    .seg button { flex: 1 1 auto; min-width: 64px; background: transparent; color: var(--hint); border: none; border-radius: 7px; padding: 8px 6px; font-weight: 600; font-size: 13px; }
+    .seg button.on { background: var(--btn); color: var(--btn-text); }
+    .seg button:disabled { opacity: .35; }
+    .lora-item { display: flex; align-items: center; gap: 9px; padding: 9px 2px; border-bottom: 1px solid var(--border); }
+    .lora-item .cb { width: 20px; height: 20px; flex: 0 0 auto; accent-color: var(--btn); }
+    .lora-item .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+    .lora-item input[type=range] { width: 92px; flex: 0 0 auto; accent-color: var(--accent); }
+    .lora-item .wv { width: 30px; text-align: right; font-size: 12px; color: var(--hint); font-variant-numeric: tabular-nums; }
+    .lora-item.off input[type=range], .lora-item.off .wv { opacity: .35; }
+    .dl { border: 1px solid var(--border); background: var(--sec-bg); color: var(--link); border-radius: 8px; padding: 6px 11px; font-weight: 600; font-size: 12.5px; white-space: nowrap; }
+    .dl:disabled { opacity: .5; }
+    .cvt { display: flex; align-items: center; gap: 9px; padding: 9px 2px; border-bottom: 1px dashed var(--border); }
+    .cvt .grow { flex: 1; min-width: 0; }
+    .cvt .grow .t2 { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .img-note { color: var(--hint); font-size: 12.5px; margin: 8px 2px; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="back" id="back">‹ Back</span>
+    <span class="title" id="title">Your Adventures</span>
+    <span class="menu" id="menu" title="Memory & Characters">☰</span>
+    <span class="newbtn" id="newbtn">＋ New</span>
+  </header>
+  <main id="main"><div class="empty">Loading…</div></main>
+
+  <div class="overlay hidden" id="overlay">
+    <div class="sheet">
+      <div class="sheet-head"><span class="grow" id="sheet-title">Story Info</span><span class="sheet-close" id="sheet-close">✕</span></div>
+      <div class="tabs">
+        <button data-tab="memory" class="on">Memory</button>
+        <button data-tab="chars">Characters</button>
+      </div>
+      <div class="sheet-body" id="sheet-body"></div>
+    </div>
+  </div>
+
+  <div class="overlay hidden" id="img-overlay">
+    <div class="sheet">
+      <div class="sheet-head"><span class="grow">🎨 Image settings</span><span class="sheet-close" id="img-close">✕</span></div>
+      <div class="sheet-body" id="img-body"></div>
+    </div>
+  </div>
+
+  <div class="dock hidden" id="dock">
+    <div class="actions">
+      <button id="btn-continue">↻ Continue</button>
+      <button id="btn-retry">⟲ Retry</button>
+      <button id="btn-erase">⌫ Erase</button>
+      <button id="btn-image" class="hidden">🎨 Image</button>
+    </div>
+    <div class="modes">
+      <button data-mode="do" class="on">Do</button>
+      <button data-mode="say">Say</button>
+      <button data-mode="story">Story</button>
+    </div>
+    <div class="composer">
+      <textarea id="input" rows="1" placeholder="What do you do?"></textarea>
+      <button id="send">Send</button>
+    </div>
+  </div>
+
+  <script>
+    const tg = window.Telegram ? window.Telegram.WebApp : null;
+    if (tg) { tg.ready(); tg.expand(); }
+    const INIT = tg ? tg.initData : "";
+    const BROWSER = !INIT;  // opened in a normal browser (no Telegram initData) -> cookie auth
+    const H = { "Content-Type": "application/json", "Authorization": "tma " + INIT };
+    const PLACEHOLDERS = { do: "What do you do?", say: "What do you say?", story: "Write the next part of the story…" };
+
+    const $ = (id) => document.getElementById(id);
+    const main = $("main"), titleEl = $("title"), backEl = $("back"), dock = $("dock"), newBtn = $("newbtn");
+    const menuBtn = $("menu"), overlay = $("overlay"), sheetBody = $("sheet-body");
+    const input = $("input"), sendBtn = $("send");
+    const esc = (s) => (s || "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+    let state = { view: "list", offset: 0, total: 0, limit: 20, id: null, title: "", mode: "do", busy: false,
+      imgOk: false, imgMeta: { engines: [], nsfwAllowed: false },
+      imgCfg: { nsfw: false, engine: "auto", shot: "scene", loras: [] } };
+    // Friendly engine alias -> a concrete DM key for /loras queries (ecosystem lookup).
+    const LORA_KEY = { realistic: "jugg", anime: "wai", anthro: "pony" };
+
+    async function api(path, opts = {}) {
+      const res = await fetch(path, { headers: H, ...opts });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return res.json();
+    }
+
+    /* ---------- Adventure list ---------- */
+    async function showList() {
+      state.view = "list"; backEl.style.display = "none"; dock.classList.add("hidden");
+      newBtn.classList.remove("hidden"); menuBtn.classList.remove("show");
+      titleEl.textContent = "Your Adventures";
+      main.innerHTML = '<div class="empty">Loading…</div>';
+      try {
+        const data = await api(`/api/adventures?offset=${state.offset}&limit=${state.limit}`);
+        state.total = data.total;
+        if (!data.items.length) {
+          main.innerHTML = '<div class="empty">No adventures yet.<br>Create one in the bot with <b>/adventure</b>.</div>';
+          return;
+        }
+        let h = '<div class="list">';
+        for (const a of data.items) {
+          h += `<div class="adv" data-id="${a.id}">
+            <div class="t">${esc(a.title)}</div>
+            <div class="m"><span class="badge ${esc(a.status)}">${esc(a.status)}</span> &nbsp;#${a.id}</div></div>`;
+        }
+        const from = state.offset, to = state.offset + data.items.length;
+        h += `<div class="pager">
+          <button id="prev" ${from <= 0 ? "disabled" : ""}>‹ Newer</button>
+          <span class="hint" style="font-size:13px;">${from + 1}–${to} of ${state.total}</span>
+          <button id="next" ${to >= state.total ? "disabled" : ""}>Older ›</button></div>`;
+        if (BROWSER) h += '<div style="text-align:center;padding:8px 0 20px;"><span class="hint" id="signout" style="cursor:pointer;text-decoration:underline;font-size:13px;">Sign out</span></div>';
+        h += '</div>';
+        main.innerHTML = h;
+        if ($("signout")) $("signout").onclick = logout;
+        main.querySelectorAll(".adv").forEach(el => el.onclick = () => openStory(+el.dataset.id, el.querySelector(".t").textContent));
+        if ($("prev")) $("prev").onclick = () => { state.offset = Math.max(0, state.offset - state.limit); showList(); };
+        if ($("next")) $("next").onclick = () => { state.offset += state.limit; showList(); };
+      } catch (e) {
+        main.innerHTML = `<div class="empty">Couldn't load adventures.<br><span class="hint">${esc(e.message)}</span></div>`;
+      }
+    }
+
+    /* ---------- Story view ---------- */
+    function renderStory(msgs) {
+      if (!msgs.length) {
+        main.innerHTML = '<div class="story"><p class="hint" style="font-style:italic;">The page is blank. Make your first move below to begin the story.</p></div>';
+        return;
+      }
+      let h = '<div class="story" id="story-body">';
+      for (const m of msgs) {
+        if (m.role === "user") {
+          h += `<p class="action">${esc(m.content)}</p>`;
+        } else if (m.role === "system") {
+          continue;
+        } else {
+          h += `<p class="narrator">${esc(m.content)}</p>`;
+        }
+      }
+      h += "</div>";
+      main.innerHTML = h;
+      main.scrollTop = main.scrollHeight;
+    }
+
+    async function loadStory() {
+      try {
+        const data = await api(`/api/adventures/${state.id}/messages?limit=200`);
+        renderStory(data.messages);
+      } catch (e) {
+        main.innerHTML = `<div class="empty">Couldn't open adventure.<br><span class="hint">${esc(e.message)}</span></div>`;
+      }
+    }
+
+    async function openStory(id, title) {
+      state.view = "story"; state.id = id; state.title = title;
+      backEl.style.display = "inline"; dock.classList.remove("hidden");
+      newBtn.classList.add("hidden"); menuBtn.classList.add("show");
+      titleEl.textContent = title;
+      main.innerHTML = '<div class="empty">Loading…</div>';
+      await loadStory();
+      // Show the image button only if the DM image server is reachable.
+      try {
+        const h = await api("/api/image/health");
+        state.imgOk = !!h.available;
+        state.imgMeta = { engines: h.engines || [], nsfwAllowed: !!h.nsfw_allowed };
+        if (!state.imgMeta.nsfwAllowed) state.imgCfg.nsfw = false;
+        $("btn-image").classList.toggle("hidden", !h.available);
+      } catch (e) { state.imgOk = false; $("btn-image").classList.add("hidden"); }
+    }
+
+    /* ---------- Image settings panel ---------- */
+    const imgOverlay = $("img-overlay"), imgBody = $("img-body");
+    const ENGINE_PRESETS = [
+      { id: "auto", label: "Auto", needs: null },
+      { id: "realistic", label: "Realistic", needs: "jugg" },
+      { id: "anime", label: "Anime", needs: "wai" },
+      { id: "anthro", label: "Anthro", needs: "pony" },
+    ];
+    const SHOTS = [["scene", "Scene"], ["portrait", "Portrait"], ["cinematic", "Cinematic"]];
+    const enginePresent = (k) => state.imgMeta.engines.some(e => e.key === k && e.present);
+    const loraQueryKey = () => state.imgCfg.engine === "auto" ? null : (LORA_KEY[state.imgCfg.engine] || state.imgCfg.engine);
+    const engineSupportsLora = (k) => { const e = state.imgMeta.engines.find(x => x.key === k); return !!(e && e.supports_lora); };
+    const loraSel = (file) => state.imgCfg.loras.find(l => l.file === file);
+
+    function openImageSheet() { imgOverlay.classList.remove("hidden"); renderImageSheet(); }
+    function closeImageSheet() { imgOverlay.classList.add("hidden"); }
+
+    function segHTML(items, current, cls, attr) {
+      return `<div class="seg" ${cls}>` + items.map(([v, lbl, dis]) =>
+        `<button data-${attr}="${v}" class="${v === current ? "on" : ""}" ${dis ? "disabled" : ""}>${lbl}</button>`).join("") + "</div>";
+    }
+
+    function renderImageSheet() {
+      const cfg = state.imgCfg;
+      const engines = ENGINE_PRESETS.filter(p => !p.needs || enginePresent(p.needs));
+      const ratingItems = [["sfw", "SFW"], ["nsfw", "NSFW", !state.imgMeta.nsfwAllowed]];
+      let h = "";
+      h += `<label>Rating</label>` + segHTML(ratingItems, cfg.nsfw ? "nsfw" : "sfw", 'id="seg-rating"', "rating");
+      if (!state.imgMeta.nsfwAllowed) h += `<div class="img-note">NSFW is locked — enable it in the bot with <b>/nsfwpref enable</b>.</div>`;
+      h += `<label>Engine</label>` + segHTML(engines.map(e => [e.id, e.label]), cfg.engine, 'id="seg-engine"', "engine");
+      h += `<label>Shot</label>` + segHTML(SHOTS, cfg.shot, 'id="seg-shot"', "shot");
+      h += `<label>LoRAs</label><div id="lora-zone"></div>`;
+      h += `<button class="primary" id="img-go">Generate 🎨</button>`;
+      imgBody.innerHTML = h;
+
+      imgBody.querySelectorAll("#seg-rating button").forEach(b => b.onclick = () => {
+        if (b.disabled) return; cfg.nsfw = b.dataset.rating === "nsfw"; renderImageSheet();
+      });
+      imgBody.querySelectorAll("#seg-engine button").forEach(b => b.onclick = () => {
+        if (cfg.engine !== b.dataset.engine) cfg.loras = [];  // ecosystem changed
+        cfg.engine = b.dataset.engine; renderImageSheet();
+      });
+      imgBody.querySelectorAll("#seg-shot button").forEach(b => b.onclick = () => { cfg.shot = b.dataset.shot; renderImageSheet(); });
+      $("img-go").onclick = generateScene;
+      renderLoraZone();
+    }
+
+    async function renderLoraZone() {
+      const zone = $("lora-zone"); if (!zone) return;
+      const key = loraQueryKey();
+      if (!key) { zone.innerHTML = `<div class="img-note">Pick an engine (not Auto) to browse & stack LoRAs.</div>`; return; }
+      if (!engineSupportsLora(key)) { zone.innerHTML = `<div class="img-note">This engine doesn't use LoRAs.</div>`; return; }
+      zone.innerHTML = `
+        <div style="display:flex;gap:8px;margin:2px 0 4px;">
+          <input id="lora-q" placeholder="Search Civitai for more…" style="flex:1;" />
+          <button class="dl" id="lora-search-btn">Search</button>
+        </div>
+        <div id="lora-installed"><p class="muted">Loading installed…</p></div>
+        <div id="lora-results"></div>`;
+      $("lora-search-btn").onclick = civitaiSearch;
+      $("lora-q").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); civitaiSearch(); } });
+      await loadInstalled();
+    }
+
+    async function loadInstalled() {
+      const box = $("lora-installed"); const key = loraQueryKey();
+      try {
+        const r = await api(`/api/image/loras?engine=${encodeURIComponent(key)}`);
+        const loras = r.loras || [];
+        if (!loras.length) { box.innerHTML = `<div class="img-note">No installed LoRAs for this engine yet — search below to add some.</div>`; return; }
+        box.innerHTML = loras.map(l => {
+          const sel = loraSel(l.file); const w = sel ? sel.weight : 0.8;
+          return `<div class="lora-item ${sel ? "" : "off"}" data-file="${esc(l.file)}">
+            <input type="checkbox" class="cb" ${sel ? "checked" : ""} />
+            <span class="nm" title="${esc(l.label)}">${esc(l.label)}</span>
+            <input type="range" min="0" max="1.5" step="0.05" value="${w}" />
+            <span class="wv">${w.toFixed(2)}</span></div>`;
+        }).join("");
+        box.querySelectorAll(".lora-item").forEach(row => {
+          const file = row.dataset.file, cb = row.querySelector(".cb"), rng = row.querySelector("input[type=range]"), wv = row.querySelector(".wv");
+          const label = row.querySelector(".nm").title;
+          cb.onchange = () => {
+            if (cb.checked) { state.imgCfg.loras.push({ file, label, weight: +rng.value }); row.classList.remove("off"); }
+            else { state.imgCfg.loras = state.imgCfg.loras.filter(l => l.file !== file); row.classList.add("off"); }
+          };
+          rng.oninput = () => { wv.textContent = (+rng.value).toFixed(2); const s = loraSel(file); if (s) s.weight = +rng.value; };
+        });
+      } catch (e) { box.innerHTML = `<div class="img-note">⚠️ ${esc(e.message)}</div>`; }
+    }
+
+    async function civitaiSearch() {
+      const q = ($("lora-q").value || "").trim();
+      const res = $("lora-results"); res.innerHTML = `<p class="muted">Searching Civitai…</p>`;
+      try {
+        const r = await api("/api/image/loras/search", { method: "POST", body: JSON.stringify({
+          query: q, engine: loraQueryKey(), nsfw: state.imgCfg.nsfw }) });
+        const items = r.results || [];
+        if (r.error) { res.innerHTML = `<div class="img-note">⚠️ ${esc(r.error)}</div>`; return; }
+        if (!items.length) { res.innerHTML = `<div class="img-note">No matches in this engine's ecosystem.</div>`; return; }
+        res.innerHTML = `<div class="divider"></div><label style="margin-top:0;">Civitai — ${esc(loraQueryKey())} ecosystem</label>` +
+          items.map(it => `<div class="cvt" data-vid="${it.version_id}">
+            <span class="grow"><div class="t2">${esc(it.name)}</div>
+              <span class="muted">${esc(it.base_model || "")}${it.nsfw ? " · 🔞" : ""}${it.downloads ? " · ⬇ " + it.downloads : ""}</span></span>
+            <button class="dl" data-vid="${it.version_id}" data-name="${esc(it.name)}">Download</button></div>`).join("");
+        res.querySelectorAll(".dl").forEach(b => b.onclick = () => civitaiDownload(b));
+      } catch (e) { res.innerHTML = `<div class="img-note">⚠️ ${esc(e.message)}</div>`; }
+    }
+
+    async function civitaiDownload(btn) {
+      btn.disabled = true; const orig = btn.textContent; btn.textContent = "…";
+      try {
+        const r = await api("/api/image/loras/download", { method: "POST", body: JSON.stringify({
+          engine: loraQueryKey(), version_id: +btn.dataset.vid, name: btn.dataset.name }) });
+        if (!r.ok) throw new Error(r.error || "download failed");
+        btn.textContent = "✓ Added"; await loadInstalled();  // hot-load the new file
+      } catch (e) { btn.disabled = false; btn.textContent = orig; alert("⚠️ " + e.message); }
+    }
+
+    async function generateScene() {
+      closeImageSheet();
+      if (state.busy) return;
+      state.busy = true; setBusy(true);
+      const body = $("story-body") || main.querySelector(".story");
+      const wait = document.createElement("p");
+      wait.className = "typing"; wait.id = "imgwait"; wait.textContent = "Painting the scene…";
+      if (body) { body.appendChild(wait); main.scrollTop = main.scrollHeight; }
+      try {
+        const res = await fetch(`/api/adventures/${state.id}/image`, { method: "POST", headers: H, body: JSON.stringify(imgPayload()) });
+        if (!res.ok) throw new Error("image server " + res.status);
+        const url = URL.createObjectURL(await res.blob());
+        wait.remove();
+        const img = document.createElement("img");
+        img.className = "scene-img"; img.src = url;
+        if (body) { body.appendChild(img); main.scrollTop = main.scrollHeight; }
+      } catch (e) {
+        const w = $("imgwait"); if (w) w.textContent = "⚠️ " + e.message;
+      } finally { state.busy = false; setBusy(false); }
+    }
+
+    function imgPayload(overrides) {
+      const c = state.imgCfg;
+      return Object.assign({
+        engine: c.engine, shot: c.shot, nsfw: c.nsfw,
+        loras: c.loras.map(l => ({ file: l.file, weight: l.weight })),
+      }, overrides || {});
+    }
+
+    /* ---------- Create adventure ---------- */
+    async function showCreate() {
+      state.view = "create";
+      backEl.style.display = "inline"; dock.classList.add("hidden");
+      newBtn.classList.add("hidden"); menuBtn.classList.remove("show");
+      titleEl.textContent = "New Adventure";
+      main.innerHTML = `<div class="create">
+        <label>Title</label>
+        <input id="c-title" maxlength="80" placeholder="Name your adventure" />
+        <label>Premise</label>
+        <textarea id="c-premise" rows="4" placeholder="What's the setup? A haunted lighthouse, a heist gone wrong, a first date with a vampire…"></textarea>
+        <label>You play as (optional)</label>
+        <input id="c-role" maxlength="120" placeholder="e.g. a rookie detective" />
+        <label id="c-cast-label" style="display:none;">Feature characters (optional)</label>
+        <div class="cast" id="c-cast"></div>
+        <button class="go" id="c-go">Begin Adventure ›</button>
+        <div class="status" id="c-status"></div>
+      </div>`;
+      $("c-go").onclick = createAdventure;
+      // Offer the player's existing characters to star in the new adventure.
+      try {
+        const chars = (await api("/api/characters")).characters || [];
+        if (chars.length) {
+          $("c-cast-label").style.display = "block";
+          $("c-cast").innerHTML = chars.map(c =>
+            `<span class="chip" data-id="${c.id}">${esc(c.emoji)} ${esc(c.display_name)}</span>`).join("");
+          $("c-cast").querySelectorAll(".chip").forEach(el => el.onclick = () => el.classList.toggle("on"));
+        }
+      } catch (e) { /* no characters yet is fine */ }
+    }
+
+    async function createAdventure() {
+      const title = $("c-title").value.trim();
+      const premise = $("c-premise").value.trim();
+      const player_role = $("c-role").value.trim();
+      if (!title && !premise) { $("c-status").textContent = "Add a title or a premise to begin."; return; }
+      const character_ids = Array.from($("c-cast").querySelectorAll(".chip.on")).map(el => +el.dataset.id);
+      $("c-go").disabled = true;
+      $("c-status").textContent = "Weaving the opening scene…";
+      try {
+        const data = await api("/api/adventures", { method: "POST", body: JSON.stringify({ title, premise, player_role, character_ids }) });
+        await openStory(data.id, data.title);
+      } catch (e) {
+        $("c-status").textContent = "⚠️ " + e.message;
+        $("c-go").disabled = false;
+      }
+    }
+
+    /* ---------- Memory / Characters panel ---------- */
+    let panelTab = "memory";
+    function openPanel() { overlay.classList.remove("hidden"); renderPanel(); }
+    function closePanel() { overlay.classList.add("hidden"); }
+
+    async function renderPanel() {
+      sheetBody.innerHTML = '<p class="muted">Loading…</p>';
+      document.querySelectorAll(".tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === panelTab));
+      try {
+        if (panelTab === "memory") await renderMemory();
+        else await renderChars();
+      } catch (e) { sheetBody.innerHTML = `<p class="muted">⚠️ ${esc(e.message)}</p>`; }
+    }
+
+    async function renderMemory() {
+      const m = await api(`/api/adventures/${state.id}/memory`);
+      sheetBody.innerHTML = `
+        <label>You play as</label>
+        <input id="m-role" value="${esc(m.player_role)}" placeholder="Who are you in this story?" />
+        <label>Current objective</label>
+        <input id="m-obj" value="${esc(m.objective)}" placeholder="What are you trying to do?" />
+        <label>Canon / lore (the story's memory)</label>
+        <textarea id="m-lore" rows="12" placeholder="Facts, characters, places and threads the narrator should remember.">${esc(m.lore)}</textarea>
+        <button class="primary" id="m-save">Save memory</button>
+        <div class="muted" id="m-status" style="text-align:center;margin-top:8px;"></div>`;
+      $("m-save").onclick = async () => {
+        $("m-save").disabled = true; $("m-status").textContent = "Saving…";
+        try {
+          await api(`/api/adventures/${state.id}/memory`, { method: "PUT", body: JSON.stringify({
+            lore: $("m-lore").value, player_role: $("m-role").value, objective: $("m-obj").value }) });
+          $("m-status").textContent = "Saved ✓";
+        } catch (e) { $("m-status").textContent = "⚠️ " + e.message; }
+        $("m-save").disabled = false;
+      };
+    }
+
+    async function renderChars() {
+      const [inAdv, all] = await Promise.all([
+        api(`/api/adventures/${state.id}/characters`),
+        api(`/api/characters`),
+      ]);
+      const attachedIds = new Set(inAdv.characters.map(c => c.id));
+      const available = (all.characters || []).filter(c => !attachedIds.has(c.id));
+      const pbtn = (c) => state.imgOk ? `<span class="x" data-portrait="${c.id}" title="Portrait">🖼</span>` : "";
+      let h = '<label>In this adventure</label>';
+      h += inAdv.characters.length
+        ? inAdv.characters.map(c => `<div class="row"><span class="grow">${esc(c.emoji)} ${esc(c.display_name)} <span class="muted">· ${esc(c.role)}</span></span>${pbtn(c)}<span class="x" data-detach="${c.id}">✕</span></div>`).join("")
+        : '<p class="muted">No characters in this story yet.</p>';
+      if (available.length) {
+        h += '<label>Add one of yours</label>';
+        h += available.map(c => `<div class="row"><span class="grow">${esc(c.emoji)} ${esc(c.display_name)}</span>${pbtn(c)}<span class="x" data-attach="${c.id}" style="color:var(--link);">＋ Add</span></div>`).join("");
+      }
+      h += '<div class="divider"></div><label>Create a new character</label>';
+      h += `<input id="nc-name" placeholder="Name (optional)" />
+        <textarea id="nc-desc" rows="3" placeholder="Describe them — personality, look, role in the story…" style="margin-top:8px;"></textarea>
+        <button class="primary" id="nc-go">Generate &amp; add</button>
+        <div class="muted" id="nc-status" style="text-align:center;margin-top:8px;"></div>`;
+      sheetBody.innerHTML = h;
+      sheetBody.querySelectorAll("[data-detach]").forEach(el => el.onclick = async () => {
+        await api(`/api/adventures/${state.id}/characters/${el.dataset.detach}`, { method: "DELETE" }); renderChars();
+      });
+      sheetBody.querySelectorAll("[data-attach]").forEach(el => el.onclick = async () => {
+        await api(`/api/adventures/${state.id}/characters`, { method: "POST", body: JSON.stringify({ character_id: +el.dataset.attach, role: "companion" }) }); renderChars();
+      });
+      sheetBody.querySelectorAll("[data-portrait]").forEach(el => el.onclick = async () => {
+        const row = el.closest(".row"); const prev = el.textContent; el.textContent = "…";
+        try {
+          const res = await fetch(`/api/characters/${el.dataset.portrait}/image`, {
+            method: "POST", headers: H, body: JSON.stringify(imgPayload({ shot: "portrait" })) });
+          if (!res.ok) throw new Error(res.status);
+          const img = document.createElement("img"); img.className = "portrait-img"; img.src = URL.createObjectURL(await res.blob());
+          row.after(img); el.textContent = prev;
+        } catch (e) { el.textContent = "⚠️"; }
+      });
+      $("nc-go").onclick = async () => {
+        const name = $("nc-name").value.trim(), description = $("nc-desc").value.trim();
+        if (!name && !description) { $("nc-status").textContent = "Give a name or a description."; return; }
+        $("nc-go").disabled = true; $("nc-status").textContent = "Bringing them to life…";
+        try {
+          const c = await api("/api/characters", { method: "POST", body: JSON.stringify({ name, description }) });
+          await api(`/api/adventures/${state.id}/characters`, { method: "POST", body: JSON.stringify({ character_id: c.id, role: "companion" }) });
+          renderChars();
+        } catch (e) { $("nc-status").textContent = "⚠️ " + e.message; $("nc-go").disabled = false; }
+      };
+    }
+
+    function showTyping() {
+      const body = $("story-body") || main.querySelector(".story");
+      if (!body) return;
+      const t = document.createElement("p");
+      t.className = "typing"; t.id = "typing"; t.textContent = "The story unfolds…";
+      body.appendChild(t); main.scrollTop = main.scrollHeight;
+    }
+
+    async function act(fn) {
+      if (state.busy) return;
+      state.busy = true; setBusy(true); showTyping();
+      try { await fn(); await loadStory(); }
+      catch (e) { const t = $("typing"); if (t) t.textContent = "⚠️ " + e.message; }
+      finally { state.busy = false; setBusy(false); }
+    }
+    function setBusy(b) {
+      sendBtn.disabled = b;
+      ["btn-continue", "btn-retry", "btn-erase", "btn-image"].forEach(id => $(id).disabled = b);
+    }
+
+    async function sendTurn() {
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = ""; input.style.height = "auto";
+      const mode = state.mode;
+      await act(() => api(`/api/adventures/${state.id}/turn`, { method: "POST", body: JSON.stringify({ text, mode }) }));
+    }
+
+    /* ---------- Wiring ---------- */
+    backEl.onclick = showList;
+    newBtn.onclick = showCreate;
+    menuBtn.onclick = openPanel;
+    $("sheet-close").onclick = closePanel;
+    overlay.onclick = (e) => { if (e.target === overlay) closePanel(); };
+    document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => { panelTab = b.dataset.tab; renderPanel(); });
+    sendBtn.onclick = sendTurn;
+    $("btn-continue").onclick = () => act(() => api(`/api/adventures/${state.id}/continue`, { method: "POST" }));
+    $("btn-retry").onclick = () => act(() => api(`/api/adventures/${state.id}/retry`, { method: "POST" }));
+    $("btn-erase").onclick = () => act(() => api(`/api/adventures/${state.id}/erase`, { method: "POST" }));
+    $("btn-image").onclick = openImageSheet;
+    $("img-close").onclick = closeImageSheet;
+    imgOverlay.onclick = (e) => { if (e.target === imgOverlay) closeImageSheet(); };
+    document.querySelectorAll(".modes button").forEach(b => b.onclick = () => {
+      state.mode = b.dataset.mode;
+      document.querySelectorAll(".modes button").forEach(x => x.classList.toggle("on", x === b));
+      input.placeholder = PLACEHOLDERS[state.mode];
+    });
+    input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 120) + "px"; });
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendTurn(); } });
+
+    /* ---------- Boot / browser login ---------- */
+    async function boot() {
+      // Inside Telegram we authenticate via initData. In a browser we need a
+      // session cookie (set by the /webapp magic link or a password login).
+      if (BROWSER) {
+        try { await api("/api/me"); }
+        catch (e) { return showLogin(); }
+      }
+      showList();
+    }
+
+    async function showLogin() {
+      state.view = "login";
+      backEl.style.display = "none"; dock.classList.add("hidden");
+      newBtn.classList.add("hidden"); menuBtn.classList.remove("show");
+      titleEl.textContent = "Mira";
+      let pwEnabled = true;
+      try { pwEnabled = !!(await (await fetch("/api/auth/config")).json()).password_enabled; } catch (e) {}
+      if (!pwEnabled) {
+        main.innerHTML = '<div class="empty">Open this from the <b>Telegram</b> app,<br>or send <b>/webapp</b> to the bot for a sign-in link.</div>';
+        return;
+      }
+      main.innerHTML = `<div class="create" style="max-width:360px;">
+        <label>Password</label>
+        <input id="lg-pw" type="password" placeholder="Your web password" autocomplete="current-password" />
+        <button class="go" id="lg-go">Sign in</button>
+        <div class="status" id="lg-status"></div>
+        <p class="hint" style="text-align:center;font-size:12.5px;margin-top:18px;">
+          Or send <b>/webapp</b> to the bot in Telegram for a one-tap sign-in link.</p>
+      </div>`;
+      const submit = async () => {
+        const token = $("lg-pw").value;
+        if (!token) return;
+        $("lg-go").disabled = true; $("lg-status").textContent = "Signing in…";
+        try {
+          const r = await fetch("/api/login", { method: "POST",
+            headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) });
+          if (!r.ok) throw new Error(r.status === 401 ? "Wrong password" : "Error " + r.status);
+          showList();
+        } catch (e) { $("lg-status").textContent = "⚠️ " + e.message; $("lg-go").disabled = false; }
+      };
+      $("lg-go").onclick = submit;
+      $("lg-pw").addEventListener("keydown", (e) => { if (e.key === "Enter") submit(); });
+    }
+
+    async function logout() {
+      try { await fetch("/api/logout", { method: "POST" }); } catch (e) {}
+      showLogin();
+    }
+
+    boot();
+  </script>
+</body>
+</html>

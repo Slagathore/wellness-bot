@@ -27,8 +27,8 @@ ollama run deepseek-v3.1
 # GPT-OSS (OpenAI's open weights)
 ollama run gpt-oss:120b-cloud
 
-# Qwen3-Coder
-ollama run qwen3-coder:480b-cloud
+# Kimi-K2.7-Code (coding specialist, thinking-capable)
+ollama run kimi-k2.7-code:cloud
 ```
 
 ### Step 3: Use in Your Wellness Bot
@@ -41,7 +41,7 @@ Once you've run the model with Ollama, use the **exact same name** in your bot:
 
 - Model name: `kimi-k2:1t-cloud`
 - Or: `deepseek-v3.1`
-- Or: `qwen3-coder:480b-cloud`
+- Or: `kimi-k2.7-code:cloud`
 
 **For Main Chat:**
 
@@ -53,7 +53,7 @@ Once you've run the model with Ollama, use the **exact same name** in your bot:
 | ------------------------ | ------------- | ----------------- | ---------------------------------- |
 | `kimi-k2:1t-cloud`       | `:1t-cloud`   | 1 Trillion params | General reasoning, coding          |
 | `deepseek-v3.1`          | (default)     | 671B              | Thinking mode, complex reasoning   |
-| `qwen3-coder:480b-cloud` | `:480b-cloud` | 480B              | Code generation, long context      |
+| `kimi-k2.7-code:cloud`   | `:cloud`      | MoE               | Code generation, thinking mode     |
 | `gpt-oss:120b-cloud`     | `:120b-cloud` | 120B              | General tasks, OpenAI open weights |
 
 **Important:** The cloud tag (like `:1t-cloud`) tells Ollama to use the cloud-hosted version instead of downloading locally.
@@ -115,7 +115,13 @@ ollama run kimi-k2:latest            # Latest (may be smaller local version)
 
 ```bash
 ollama run qwen3-coder:30b           # 30B local version (smaller, downloadable)
-ollama run qwen3-coder:480b-cloud    # 480B cloud version (huge!)
+ollama run qwen3-coder-next:cloud    # cloud version (next-gen)
+```
+
+### Kimi-K2.7-Code
+
+```bash
+ollama run kimi-k2.7-code:cloud      # coding specialist, thinking-capable
 ```
 
 ### GPT-OSS
@@ -168,7 +174,7 @@ ollama run kimi-k2            # ❌ May try to download locally
 
 1. **`kimi-k2:1t-cloud`** - 1T parameters, excellent reasoning
 2. **`deepseek-v3.1`** - 671B with thinking mode
-3. **`qwen3-coder:480b-cloud`** - 480B, huge context window
+3. **`kimi-k2.7-code:cloud`** - coding specialist with thinking mode
 
 ### Best for Daily Chat (Speed & Cost)
 
@@ -178,7 +184,7 @@ ollama run kimi-k2            # ❌ May try to download locally
 
 ### Best for Code Analysis
 
-1. **`qwen3-coder:480b-cloud`** - Specialized for code
+1. **`kimi-k2.7-code:cloud`** - Specialized for code
 2. **`deepseek-v3.1`** - Great at reasoning about code
 3. **`kimi-k2:1t-cloud`** - General excellence includes coding
 
@@ -188,7 +194,7 @@ ollama run kimi-k2            # ❌ May try to download locally
 | ------------------------ | ----------------------------------- |
 | `kimi-k2:1t-cloud`       | `ollama run kimi-k2:1t-cloud`       |
 | `deepseek-v3.1`          | `ollama run deepseek-v3.1`          |
-| `qwen3-coder:480b-cloud` | `ollama run qwen3-coder:480b-cloud` |
+| `kimi-k2.7-code:cloud`   | `ollama run kimi-k2.7-code:cloud`   |
 | `gpt-oss:120b-cloud`     | `ollama run gpt-oss:120b-cloud`     |
 
 ---

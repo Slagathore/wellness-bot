@@ -111,8 +111,13 @@ def _chat_impl(
                     "Invalid request_timeout %r supplied to chat(); falling back to default.",
                     timeout_value,
                 )
+        think_value = payload_options.pop("think", None)
+        if think_value is not None:
+            payload["think"] = think_value
         if payload_options:
             payload["options"] = payload_options
+    if "think" not in payload and getattr(cfg, "llm_think", False):
+        payload["think"] = cfg.llm_think
     if request_timeout is None:
         request_timeout = 120.0
 
@@ -181,7 +186,22 @@ def _chat_impl(
 
     if data is None:
         raise RuntimeError("Ollama API error: no response data")
-    return {"text": data["message"]["content"], "raw": data}
+    return _native_chat_result(data, cfg)
+
+
+def _native_chat_result(data: dict[str, Any], cfg: Any) -> dict:
+    """Build the standard chat result, separating thinking from content."""
+
+    message = data["message"]
+    thinking = message.get("thinking")
+    if thinking is not None and not getattr(cfg, "show_thinking", False):
+        # Keep reasoning out of returned/stored payloads unless explicitly enabled.
+        message.pop("thinking", None)
+        thinking = None
+    result = {"text": message["content"], "raw": data}
+    if thinking is not None:
+        result["thinking"] = thinking
+    return result
 
 
 async def _chat_impl_async(
@@ -216,8 +236,13 @@ async def _chat_impl_async(
                     "Invalid request_timeout %r supplied to chat_async(); falling back to default.",
                     timeout_value,
                 )
+        think_value = payload_options.pop("think", None)
+        if think_value is not None:
+            payload["think"] = think_value
         if payload_options:
             payload["options"] = payload_options
+    if "think" not in payload and getattr(cfg, "llm_think", False):
+        payload["think"] = cfg.llm_think
     if request_timeout is None:
         request_timeout = 120.0
 
@@ -279,7 +304,7 @@ async def _chat_impl_async(
 
     if data is None:
         raise RuntimeError(f"Ollama API error: {last_error}") from last_error
-    return {"text": data["message"]["content"], "raw": data}
+    return _native_chat_result(data, cfg)
 
 
 def chat(
@@ -516,8 +541,13 @@ def _generate_impl(
                     "Invalid request_timeout %r supplied to generate(); falling back to default.",
                     timeout_value,
                 )
+        think_value = payload_options.pop("think", None)
+        if think_value is not None:
+            payload["think"] = think_value
         if payload_options:
             payload["options"] = payload_options
+    if "think" not in payload and getattr(cfg, "llm_think", False):
+        payload["think"] = cfg.llm_think
     if request_timeout is None:
         request_timeout = 120.0
 
@@ -532,7 +562,15 @@ def _generate_impl(
         raise RuntimeError(f"Ollama API error: {exc}") from exc
 
     data = response.json()
-    return {"text": data["response"], "raw": data}
+    thinking = data.get("thinking")
+    if thinking is not None and not getattr(cfg, "show_thinking", False):
+        # Keep reasoning out of returned/stored payloads unless explicitly enabled.
+        data.pop("thinking", None)
+        thinking = None
+    result = {"text": data["response"], "raw": data}
+    if thinking is not None:
+        result["thinking"] = thinking
+    return result
 
 
 def generate(

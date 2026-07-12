@@ -11,7 +11,7 @@ services:
     volumes:
       - ./wellness_data:/app/wellness_data
     ports:
-      - "9102:9102"
+      - "9103:9103"
     restart: unless-stopped
 
   prometheus:
@@ -20,14 +20,14 @@ services:
     volumes:
       - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
-      - "9090:9090"
+      - "9092:9090"
     restart: unless-stopped
 
   grafana:
     image: grafana/grafana:latest
     container_name: wellness_grafana
     ports:
-      - "3000:3000"
+      - "3012:3000"
     depends_on:
       - prometheus
     restart: unless-stopped

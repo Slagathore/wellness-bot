@@ -7,7 +7,12 @@ import struct
 from typing import Sequence
 
 from app.config import settings
-from app.db import db_ro, db_rw
+from app.db import (
+    db_ro,
+    db_rw,
+    mark_vector_extension_loaded,
+    vector_extension_is_loaded,
+)
 
 from .base import VectorBackend
 
@@ -19,7 +24,17 @@ class SqliteVecBackend(VectorBackend):
         self._dim: int | None = None
 
     def _register_extension(self, conn: sqlite3.Connection) -> None:
-        """Ensure the sqlite-vec extension is available on the connection."""
+        """Ensure the sqlite-vec extension is available on the connection.
+
+        Connections come from a shared pool and are reused across operations, so
+        this may be called many times on the same connection. Loading the
+        extension more than once re-registers its SQL functions; on Linux that
+        raises "unable to delete/modify user-function due to active statements".
+        Load exactly once per connection by tagging it after the first load.
+        """
+
+        if vector_extension_is_loaded(conn):
+            return
 
         import os
 
@@ -39,6 +54,8 @@ class SqliteVecBackend(VectorBackend):
         conn.load_extension(ext_path)
         conn.enable_load_extension(False)
 
+        mark_vector_extension_loaded(conn)
+
     def ensure_ready(self, dim: int) -> None:
         """Create the virtual table for vector search if needed."""
 
@@ -49,7 +66,7 @@ class SqliteVecBackend(VectorBackend):
                 f"""
                 CREATE VIRTUAL TABLE IF NOT EXISTS vec_messages
                 USING vec0(
-                    vector({dim})
+                    vector float[{dim}]
                 )
                 """
             )

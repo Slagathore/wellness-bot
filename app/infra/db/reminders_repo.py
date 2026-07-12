@@ -62,8 +62,10 @@ class SqliteReminderRepository:
                        r.enabled, r.last_delivered_at, u.telegram_user_id
                 FROM reminders r
                 LEFT JOIN users u ON u.id = r.user_id
-                WHERE r.enabled = 1 AND SUBSTR(r.next_run_at, 1, 19) <= ?
-                ORDER BY r.next_run_at ASC
+                WHERE r.enabled = 1
+                  AND REPLACE(SUBSTR(r.next_run_at, 1, 19), 'T', ' ')
+                      <= REPLACE(SUBSTR(?, 1, 19), 'T', ' ')
+                ORDER BY REPLACE(SUBSTR(r.next_run_at, 1, 19), 'T', ' ') ASC
                 LIMIT ?
                 """,
                 (ts_str, limit),

@@ -11,10 +11,8 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from typing import Optional
 
 from app.utils.time_utils import (
-    OPERATOR_TZ,
     normalize_operator,
     operator_now,
     to_operator_time,

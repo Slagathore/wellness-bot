@@ -1,13 +1,38 @@
+# VCS / tooling
 .git
-__pycache__
+.github
+.mypy_cache
 .pytest_cache
-.venv
-wellness_data
-*.log
+.ruff_cache
+.snapshots
+.kilo
+.claude
+.idea
+.vscode
+
+# Python build artifacts
+__pycache__
 *.pyc
 *.pyo
 *.pyd
+.venv
+
+# Secrets and credentials -- MUST never be baked into an image layer
+.env
+.env.*
+!.env.example
+*.hash
+*.key
+
+# User data / PII and local databases
+wellness_data
 *.db
-.idea
-.vscode
+*.sqlite
+*.sqlite3
+
+# Bulky local exports / logs / misc
+perchance*.json
+*.log
 node_modules
+nul
+AUDIT.md

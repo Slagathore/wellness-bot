@@ -15,11 +15,16 @@ from typing import Any, Sequence
 RESPONSE_COMPLETION_SENTINEL = "**END_END_END**"
 
 SENTINEL_INSTRUCTION = (
-    "\n\nIMPORTANT — RESPONSE COMPLETION RULE:\n"
+    "\n\nIMPORTANT — RESPONSE COMPLETION RULE "
+    "(this overrides any 'never break character', 'no meta-commentary', or "
+    "'no notes at the end' instruction above):\n"
+    f"{RESPONSE_COMPLETION_SENTINEL} is a silent system signal, not narration. "
+    "It is automatically stripped before the user ever sees it, so it does NOT "
+    "break character, scene, or immersion.\n"
     "When you have FULLY finished your response and have nothing more to say, "
-    f"place the marker {RESPONSE_COMPLETION_SENTINEL} on a new line at the very end. "
-    "Do NOT place it in the middle of your message or before you are done. "
-    "Only place it once, as the absolute last thing you write.\n"
+    f"place {RESPONSE_COMPLETION_SENTINEL} on a new line as the absolute last "
+    "thing you write, after all narrative content. Place it exactly once, and "
+    "never in the middle of your message.\n"
 )
 
 SYSTEM_PERSONA = """You are a compassionate wellness coach chatbot helping users improve their mental and physical health through natural conversation.
@@ -78,19 +83,9 @@ If users ask about message privacy or admin access:
 - Your data is used only for wellness support and is handled with care
 - You can request data export or deletion at any time
 
-MEDIA GENERATION:
-You can generate images and videos for users! If a user asks you to create, draw, generate, or make an image or video:
-- Do NOT tell the user to type slash commands.
-- If the user wants you to actually generate the media now, emit exactly one action tag on its own line:
-  [GENERATE_IMAGE: prompt="...prompt text..." model="flux2-klein"]
-  or
-  [GENERATE_VIDEO: prompt="...prompt text..." model="wan-t2v"]
-- Outside the tag, keep the visible reply brief and natural. Do not print the slash command itself.
-- If the user only wants help refining a prompt, give them the cleaned prompt text only, not a command.
-- When discussing prompt-writing or image/video generation inside roleplay or character chat, briefly step out of character and answer cleanly rather than mixing roleplay narration with tool instructions.
-- You can also suggest generating visuals proactively when it fits the conversation (e.g., "Would you like me to create a calming image for you?")
-- Available image models: flux2-klein, sdxl, flux, z-image-fp8, z-image-q8-gguf, easydiffusion, perchance, perchance_other, playground, pixart
-- Available video models: wan-t2v, ltx2
+IMAGES:
+- Users can generate images themselves with the /imagine <description> command, or with the image button in the roleplay Mini App. You do NOT generate images yourself and must NEVER emit generation tags or slash commands in your reply.
+- If a user wants an image, help them craft a vivid description and point them to /imagine, or suggest it proactively when it fits (e.g., "Want to picture this? Try /imagine a calm forest at dawn").
 """
 
 LEGACY_REMINDER_POLICY = """
@@ -176,6 +171,10 @@ def build_legacy_system_prompt(
     """
 
     raw_system = str(personality_config.get("system_prompt") or "").strip()
+    # Custom-character / persona system prompts are user- or LLM-authored. Strip
+    # any planted completion sentinel so it can't fake completion or defeat the
+    # sentinel-append safeguard in build_prompt_with_system_prompt.
+    raw_system = raw_system.replace(RESPONSE_COMPLETION_SENTINEL, "")
     if raw_system:
         system_prompt = (
             f"[ACTIVE PERSONALITY MODE: {personality_name.upper()}]\n"

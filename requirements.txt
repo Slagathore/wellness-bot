@@ -22,7 +22,7 @@ websockets>=13.0
 
 # --- Database & vector store -------------------------------------------------
 aiosqlite>=0.19.0
-sqlite-vec>=0.0.1a13       # fast vector search; may have native issues on Windows
+sqlite-vec==0.0.1a13       # fast vector search; pinned: newer releases drop the vec0 `vector(N)` column syntax this code uses
 duckdb>=0.9.2              # analytics queries
 numpy>=1.26.4              # numpy vector backend (pure-Python fallback)
 
@@ -118,12 +118,9 @@ types-croniter>=2.0.0
 playwright>=1.45.0
 rebrowser-playwright>=1.45.0   # stealth mode for Cloudflare bypass
 
-# Local FLUX / diffusers pipeline (CUDA GPU required)
-# See flux2kleinpipeline.md for setup instructions.
-# diffusers>=0.30.0
-# gguf>=0.9.0
-# transformers>=4.41.0
-# torch>=2.3.0              # install the CUDA variant from pytorch.org
+# Image generation is delegated to the external DungeonMaster SDXL server
+# (see its own requirements). This process needs no torch/diffusers — it just
+# POSTs a prompt to DM_IMAGE_URL and gets a PNG back.
 
 # Sentence embeddings (alternative to Ollama embeddings)
 # sentence-transformers>=3.0.0

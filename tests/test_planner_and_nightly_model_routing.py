@@ -124,7 +124,7 @@ def test_nightly_reprocess_sentiments_uses_nightly_model(test_user, monkeypatch)
     monkeypatch.setattr(
         "app.workers.nightly.settings",
         lambda: SimpleNamespace(
-            nightly_model="gemini-3-flash-preview:cloud",
+            nightly_model="kimi-k2.7-code:cloud",
             planner_model="mistral-large-3:675b-cloud",
             turn_planner_model=None,
             worker_model="local-worker",
@@ -151,7 +151,7 @@ def test_nightly_reprocess_sentiments_uses_nightly_model(test_user, monkeypatch)
 
     reprocess_sentiments(limit=1)
 
-    assert captured["model"] == "gemini-3-flash-preview:cloud"
+    assert captured["model"] == "kimi-k2.7-code:cloud"
 
 
 def test_nightly_profile_analysis_uses_nightly_model(test_user, monkeypatch):
@@ -195,7 +195,7 @@ def test_nightly_profile_analysis_uses_nightly_model(test_user, monkeypatch):
     monkeypatch.setattr(
         "app.workers.nightly.settings",
         lambda: SimpleNamespace(
-            nightly_model="gemini-3-flash-preview:cloud",
+            nightly_model="kimi-k2.7-code:cloud",
             psych_model="psych-model",
             worker_model="local-worker",
         ),
@@ -218,4 +218,4 @@ def test_nightly_profile_analysis_uses_nightly_model(test_user, monkeypatch):
     )
 
     assert _analyze_user_psychological_profile(user_id, telegram_user_id, 25) is True
-    assert captured["model"] == "gemini-3-flash-preview:cloud"
+    assert captured["model"] == "kimi-k2.7-code:cloud"

@@ -59,13 +59,19 @@ def test_onboarding_flow_progression(test_config, test_user, mock_ollama):
     )
     assert "timezone" in response.lower()
 
-    # Step 7 -> support preferences prompt
+    # Step 7 -> sleep schedule prompt
     response = _require_response(
         flow.handle_user_message(telegram_user_id, user_id, "UTC-5")
     )
+    assert "sleep and wake up" in response.lower()
+
+    # Step 8 -> support preferences prompt
+    response = _require_response(
+        flow.handle_user_message(telegram_user_id, user_id, "11pm and 7am")
+    )
     assert "support you best" in response.lower()
 
-    # Step 8 -> wellness goals prompt
+    # Step 9 -> wellness goals prompt
     response = _require_response(
         flow.handle_user_message(
             telegram_user_id,
@@ -75,7 +81,7 @@ def test_onboarding_flow_progression(test_config, test_user, mock_ollama):
     )
     assert "improve or focus" in response.lower()
 
-    # Step 9 -> reminder times for meals
+    # Step 10 -> reminder times for meals
     response = _require_response(
         flow.handle_user_message(
             telegram_user_id, user_id, "Improve my sleep and energy"

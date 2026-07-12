@@ -5,8 +5,38 @@ on:
   pull_request:
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install lint tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install "ruff==0.6.9" mypy
+
+      - name: Ruff (blocking)
+        run: ruff check app/ tests/
+
+      # mypy is informational for now: the codebase is not yet type-clean, so a
+      # failure here should not block CI. Drop continue-on-error once it is.
+      - name: mypy (informational)
+        continue-on-error: true
+        run: mypy app/
+
   tests:
     runs-on: ubuntu-latest
+
+    env:
+      # Dummy values so pydantic Settings loads on the runner (no .env present).
+      # These are not real credentials; the suite runs fully offline.
+      TELEGRAM_BOT_TOKEN: test-token
 
     steps:
       - name: Checkout

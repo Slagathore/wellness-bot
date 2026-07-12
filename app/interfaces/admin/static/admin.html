@@ -33,7 +33,6 @@
     <button class="tab-btn" data-tab="system">System</button>
     <button class="tab-btn" data-tab="tools">Tools</button>
     <button class="tab-btn" data-tab="console">Console</button>
-    <button class="tab-btn" data-tab="media">Media</button>
     <button class="tab-btn" data-tab="feedback">Feedback</button>
     <button class="tab-btn" data-tab="planner-shadow">Planner Shadow</button>
   </nav>
@@ -475,106 +474,6 @@
           <button id="btn-console-send" class="danger" style="height:40px;">Send</button>
           <button id="btn-console-stop" class="secondary" style="height:40px;" disabled>Stop</button>
         </div>
-      </div>
-    </section>
-  </div>
-
-  <!-- ============================================================ -->
-  <!-- TAB: MEDIA -->
-  <!-- ============================================================ -->
-  <div class="tab-content" id="tab-media">
-    <div class="grid-2col">
-      <section>
-        <h2>AI Media Generation</h2>
-        <div class="form-col">
-          <div class="form-group">
-            <label>Model</label>
-            <select id="media-model">
-              <optgroup label="Image Models">
-                <option value="flux2-klein">FLUX.2 Klein 9B GGUF (Local API, default)</option>
-                <option value="pony-xl-v6">Pony Diffusion XL v6 (Local, 7GB, ~45s, NSFW+anime)</option>
-                <option value="wai-illustrious-xl">WAI Illustrious SDXL v1.60 (Local, 7GB, ~60s, NSFW+hires)</option>
-                <option value="unholy-desire-v7">Unholy Desire Mix Sinister v7.0 (Local, 7GB, ~30s, NSFW)</option>
-                <option value="sdxl">Stable Diffusion XL (8GB, ~45s)</option>
-                <option value="sdxl-turbo">SDXL Turbo (6GB, ~20s)</option>
-                <option value="flux">FLUX.1-dev (10GB, ~90s)</option>
-                <option value="z-image-fp8">z-image FP8 Distilled (8GB, ~25s)</option>
-                <option value="z-image-q8-gguf">Z-Image Q8 GGUF (8GB+, ~420s)</option>
-                <option value="easydiffusion">EasyDiffusion (local API, current model)</option>
-                <option value="perchance">Perchance (remote, Playwright-backed)</option>
-                <option value="perchance_other">Perchance Other (direct URL API)</option>
-                <option value="playground">Playground v2.5 (8GB, ~50s)</option>
-                <option value="pixart">PixArt-&#x3A3; (7GB, ~35s)</option>
-              </optgroup>
-              <optgroup label="Video Models (T2V)">
-                <option value="ltx2">LTX2 Rapid Merges (10GB, ~120s)</option>
-                <option value="wan-t2v">Wan 1.3B NSFW T2V (8GB, ~180s)</option>
-              </optgroup>
-            </select>
-          </div>
-          <div class="form-group" id="media-epoch-group" style="display:none;">
-            <label>Epoch Checkpoint</label>
-            <select id="media-epoch">
-              <option value="1">Epoch 1 (least trained)</option>
-              <option value="2">Epoch 2</option>
-              <option value="3">Epoch 3</option>
-              <option value="4">Epoch 4</option>
-              <option value="5">Epoch 5</option>
-              <option value="6">Epoch 6</option>
-              <option value="7">Epoch 7</option>
-              <option value="8">Epoch 8</option>
-              <option value="9">Epoch 9</option>
-              <option value="10" selected>Epoch 10 (most trained)</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label>Prompt</label>
-            <textarea id="media-prompt" rows="3" placeholder="Describe the image or video..."></textarea>
-          </div>
-          <div class="form-group">
-            <label>Negative Prompt</label>
-            <textarea id="media-negative" rows="2" placeholder="Things to avoid..."></textarea>
-          </div>
-          <div class="form-group">
-            <label class="checkbox-label">
-              <input type="checkbox" id="media-use-model-defaults" checked />
-              Keep recommended steps and guidance for the selected model
-            </label>
-            <div id="media-parameter-hint" class="form-help">
-              Using recommended settings for the selected model.
-            </div>
-          </div>
-          <div class="form-grid" style="grid-template-columns:1fr 1fr;">
-            <div class="form-group"><label>Steps</label><input type="number" id="media-steps" value="4" min="1" max="100" /></div>
-            <div class="form-group"><label>Guidance</label><input type="number" id="media-guidance" value="4.0" step="0.1" min="0" max="20" /></div>
-            <div class="form-group"><label>Width</label><input type="number" id="media-width" value="1024" step="64" min="128" max="2048" /></div>
-            <div class="form-group"><label>Height</label><input type="number" id="media-height" value="1024" step="64" min="128" max="2048" /></div>
-            <div class="form-group"><label>Seed</label><input type="number" id="media-seed" placeholder="Random" /></div>
-            <div class="form-group"><label>Owner (optional)</label><select id="media-user-id"></select></div>
-            <div class="form-group" id="media-frames-group" style="display:none;"><label>Frames</label><input type="number" id="media-frames" value="33" min="8" max="120" /></div>
-            <div class="form-group" id="media-fps-group" style="display:none;"><label>FPS</label><input type="number" id="media-fps" value="16" min="8" max="60" /></div>
-          </div>
-          <button id="btn-generate-image" class="danger full-width">Generate</button>
-          <div id="media-generation-status" class="text-xs text-muted" style="min-height:20px;"></div>
-        </div>
-      </section>
-      <section>
-        <h2>VRAM Status</h2>
-        <div id="media-vram" class="text-muted">Loading...</div>
-        <div class="flex gap-8 mt-12">
-          <button id="btn-refresh-vram" class="sm secondary">Refresh VRAM</button>
-          <button id="btn-unload-model" class="sm danger">Unload Model</button>
-        </div>
-      </section>
-    </div>
-    <section class="mt-16">
-      <h2>Generation History</h2>
-      <div class="flex gap-8 mb-8">
-        <select id="media-history-user" style="width:auto;"></select>
-        <button id="btn-load-history" class="sm">Load History</button>
-      </div>
-      <div id="media-history" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px;">
-        <div class="text-muted">No images generated yet</div>
       </div>
     </section>
   </div>

@@ -3,6 +3,13 @@
 .env.local
 .env.*.local
 *.hash
+# Cloudflare tunnel config — machine-specific creds path + tunnel UUID
+cloudflared.yml
+*.cloudflared.json
+
+# AI assistant config and instructions (kept local, never tracked)
+.claude/
+AGENTS.md
 
 # Python
 __pycache__/
