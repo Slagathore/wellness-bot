@@ -49,7 +49,7 @@ class SqliteVecBackend(VectorBackend):
                 f"""
                 CREATE VIRTUAL TABLE IF NOT EXISTS vec_messages
                 USING vec0(
-                    vector({dim})
+                    vector float[{dim}]
                 )
                 """
             )
