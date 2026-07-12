@@ -19,7 +19,17 @@ class SqliteVecBackend(VectorBackend):
         self._dim: int | None = None
 
     def _register_extension(self, conn: sqlite3.Connection) -> None:
-        """Ensure the sqlite-vec extension is available on the connection."""
+        """Ensure the sqlite-vec extension is available on the connection.
+
+        Connections come from a shared pool and are reused across operations, so
+        this may be called many times on the same connection. Loading the
+        extension more than once re-registers its SQL functions; on Linux that
+        raises "unable to delete/modify user-function due to active statements".
+        Load exactly once per connection by tagging it after the first load.
+        """
+
+        if getattr(conn, "_sqlite_vec_loaded", False):
+            return
 
         import os
 
@@ -38,6 +48,13 @@ class SqliteVecBackend(VectorBackend):
 
         conn.load_extension(ext_path)
         conn.enable_load_extension(False)
+
+        try:
+            conn._sqlite_vec_loaded = True  # type: ignore[attr-defined]
+        except (AttributeError, TypeError):
+            # Some connection objects disallow arbitrary attributes; falling
+            # back to re-loading is still correct on platforms that tolerate it.
+            pass
 
     def ensure_ready(self, dim: int) -> None:
         """Create the virtual table for vector search if needed."""
