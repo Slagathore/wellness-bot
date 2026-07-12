@@ -60,6 +60,36 @@ def _ensure_dirs() -> None:
     os.makedirs(os.path.dirname(settings().database_path), exist_ok=True)
 
 
+def _maybe_load_vector_extension(conn: sqlite3.Connection) -> None:
+    """Load the sqlite-vec extension on a freshly created connection.
+
+    The extension registers ~50 SQL functions on load. SQLite refuses to
+    create/modify functions while any statement is active on the connection
+    ("unable to delete/modify user-function due to active statements"), which is
+    enforced strictly on Linux. Callers legitimately invoke the vector backend
+    from inside an open transaction with active cursors, so loading lazily at
+    that point fails. Loading here, when the connection is pristine (only the
+    already-completed PRAGMAs have run), avoids that. Best-effort: any failure
+    leaves the backend's own lazy loader as a fallback.
+    """
+
+    if getattr(settings(), "vector_backend", None) != "sqlite-vec":
+        return
+    try:
+        import sqlite_vec
+
+        conn.enable_load_extension(True)
+        ext_path = sqlite_vec.loadable_path()
+        if not os.path.exists(ext_path) and os.path.exists(ext_path + ".dll"):
+            ext_path = ext_path + ".dll"
+        conn.load_extension(ext_path)
+        conn.enable_load_extension(False)
+        conn._sqlite_vec_loaded = True  # type: ignore[attr-defined]
+    except Exception:
+        with suppress(Exception):
+            conn.enable_load_extension(False)
+
+
 def _make_connection() -> sqlite3.Connection:
     """Create a configured SQLite connection."""
 
@@ -72,6 +102,7 @@ def _make_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
+    _maybe_load_vector_extension(conn)
     return conn
 
 
