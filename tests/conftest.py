@@ -5,18 +5,32 @@ import os
 import random
 import sqlite3
 import sys
+import tempfile
 from pathlib import Path
 from typing import Iterator, Tuple
 
 import pytest
 
-# Provide dummy values for required settings BEFORE any app module is imported.
+# Provide safe values for global settings BEFORE any app module is imported.
 # app.db (and other modules) call app.config.settings() at import time, which
 # instantiates the pydantic Settings and would raise ValidationError if the
 # required telegram_bot_token is absent (e.g. on a CI runner with no .env).
 # setdefault means a real local .env / environment still wins; this only fills
 # the gap so the test suite can collect and run hermetically.
+#
+# DATA_ROOT / DATABASE_PATH are also pinned to a writable temp location. Their
+# production defaults ("/data/telegram_wellness_bot") are not writable on the
+# Linux CI runner, so any code holding a `from app.config import settings`
+# binding that the per-test fixtures do not patch (e.g. app.utils.fs, the admin
+# server) would fail to create user dirs or open the DB. On Windows this maps to
+# a writable "C:\data\..." so the problem is invisible locally; pinning a temp
+# path makes CI match local behaviour without weakening production config.
+_TEST_DATA_ROOT = os.path.join(tempfile.gettempdir(), "wellness_bot_test_data")
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
+os.environ.setdefault("DATA_ROOT", _TEST_DATA_ROOT)
+os.environ.setdefault(
+    "DATABASE_PATH", os.path.join(_TEST_DATA_ROOT, "telegram_wellness.db")
+)
 
 repo_root = Path(__file__).resolve().parents[1]
 if str(repo_root) not in sys.path:
@@ -24,6 +38,34 @@ if str(repo_root) not in sys.path:
 
 from app.config import Settings  # noqa: E402
 from app.db import close_pool, db_rw  # noqa: E402
+from app.infra.db.schema_bootstrap import ensure_schema_current  # noqa: E402
+
+# Some tests (e.g. the admin API smoke tests) use the process-global settings()
+# and DB rather than the per-test `test_config` fixture, expecting a schema'd
+# database to already exist. Locally that role is filled by the developer's
+# persistent DB; on a fresh CI runner the global DB is empty and those endpoints
+# return 503. Bootstrap the global DB schema once so CI matches local reality.
+#
+# Order matters: the baseline tables (schema/init_db.sql) must exist before
+# ensure_schema_current() runs, because its compatibility patches ALTER existing
+# tables (e.g. add users.personality) and are skipped on a table that does not
+# yet exist. This mirrors the per-test fixture's init_test_database() + bootstrap.
+def _bootstrap_global_test_db() -> None:
+    from app.config import settings
+
+    db_path = Path(settings().database_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    schema_path = repo_root / "schema" / "init_db.sql"
+    if schema_path.exists():
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.executescript(schema_path.read_text(encoding="utf-8"))
+        finally:
+            conn.close()
+    ensure_schema_current(force=True)
+
+
+_bootstrap_global_test_db()
 
 
 @pytest.fixture(autouse=True)
