@@ -33,6 +33,11 @@ jobs:
   tests:
     runs-on: ubuntu-latest
 
+    env:
+      # Dummy values so pydantic Settings loads on the runner (no .env present).
+      # These are not real credentials; the suite runs fully offline.
+      TELEGRAM_BOT_TOKEN: test-token
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4

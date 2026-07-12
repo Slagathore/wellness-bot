@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import sqlite3
 import sys
@@ -8,6 +9,14 @@ from pathlib import Path
 from typing import Iterator, Tuple
 
 import pytest
+
+# Provide dummy values for required settings BEFORE any app module is imported.
+# app.db (and other modules) call app.config.settings() at import time, which
+# instantiates the pydantic Settings and would raise ValidationError if the
+# required telegram_bot_token is absent (e.g. on a CI runner with no .env).
+# setdefault means a real local .env / environment still wins; this only fills
+# the gap so the test suite can collect and run hermetically.
+os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token")
 
 repo_root = Path(__file__).resolve().parents[1]
 if str(repo_root) not in sys.path:
