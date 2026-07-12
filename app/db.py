@@ -98,11 +98,15 @@ def _make_connection() -> sqlite3.Connection:
         timeout=30.0,
         check_same_thread=False,
     )
+    # Load the vector extension while the connection is pristine, BEFORE running
+    # any PRAGMA. `PRAGMA journal_mode = WAL` returns a row and leaves an active
+    # statement, which would make the extension's function registration fail on
+    # Linux ("active statements").
+    _maybe_load_vector_extension(conn)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
-    _maybe_load_vector_extension(conn)
     return conn
 
 
