@@ -7,7 +7,12 @@ import struct
 from typing import Sequence
 
 from app.config import settings
-from app.db import db_ro, db_rw
+from app.db import (
+    db_ro,
+    db_rw,
+    mark_vector_extension_loaded,
+    vector_extension_is_loaded,
+)
 
 from .base import VectorBackend
 
@@ -28,7 +33,7 @@ class SqliteVecBackend(VectorBackend):
         Load exactly once per connection by tagging it after the first load.
         """
 
-        if getattr(conn, "_sqlite_vec_loaded", False):
+        if vector_extension_is_loaded(conn):
             return
 
         import os
@@ -49,12 +54,7 @@ class SqliteVecBackend(VectorBackend):
         conn.load_extension(ext_path)
         conn.enable_load_extension(False)
 
-        try:
-            conn._sqlite_vec_loaded = True  # type: ignore[attr-defined]
-        except (AttributeError, TypeError):
-            # Some connection objects disallow arbitrary attributes; falling
-            # back to re-loading is still correct on platforms that tolerate it.
-            pass
+        mark_vector_extension_loaded(conn)
 
     def ensure_ready(self, dim: int) -> None:
         """Create the virtual table for vector search if needed."""

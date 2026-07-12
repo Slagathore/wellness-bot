@@ -12,6 +12,24 @@ from app.config import settings
 
 _WRITE_LOCK = threading.RLock()
 
+# Tracks connections that already have the sqlite-vec extension loaded. Keyed by
+# id() because sqlite3.Connection objects support neither attribute assignment
+# nor weak references. The pool holds its connections for the process lifetime,
+# so their ids are stable and unique; the set is cleared whenever the pool is
+# closed (see ConnectionPool.close_all), which happens before any of those
+# connection objects are freed, so an id can never be stale-but-reused here.
+_VEC_LOADED_CONN_IDS: set[int] = set()
+
+
+def vector_extension_is_loaded(conn: sqlite3.Connection) -> bool:
+    """Return True if the sqlite-vec extension is already loaded on ``conn``."""
+    return id(conn) in _VEC_LOADED_CONN_IDS
+
+
+def mark_vector_extension_loaded(conn: sqlite3.Connection) -> None:
+    """Record that the sqlite-vec extension has been loaded on ``conn``."""
+    _VEC_LOADED_CONN_IDS.add(id(conn))
+
 
 class ConnectionPool:
     """Simple SQLite connection pool with a fixed maximum size."""
@@ -48,6 +66,7 @@ class ConnectionPool:
             with suppress(Exception):
                 conn.close()
         self._created = 0
+        _VEC_LOADED_CONN_IDS.clear()
 
 
 _pool_size = getattr(settings(), "db_pool_size", 20) or 20
@@ -84,7 +103,7 @@ def _maybe_load_vector_extension(conn: sqlite3.Connection) -> None:
             ext_path = ext_path + ".dll"
         conn.load_extension(ext_path)
         conn.enable_load_extension(False)
-        conn._sqlite_vec_loaded = True  # type: ignore[attr-defined]
+        mark_vector_extension_loaded(conn)
     except Exception:
         with suppress(Exception):
             conn.enable_load_extension(False)
