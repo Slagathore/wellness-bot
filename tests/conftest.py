@@ -31,6 +31,13 @@ os.environ.setdefault("DATA_ROOT", _TEST_DATA_ROOT)
 os.environ.setdefault(
     "DATABASE_PATH", os.path.join(_TEST_DATA_ROOT, "telegram_wellness.db")
 )
+# The admin API smoke tests authenticate against admin_username. When it is
+# unset the admin console is gated off with HTTP 503, which is what happens on
+# a CI runner with no .env (locally the developer's .env supplies these). Provide
+# defaults so those tests can exercise the endpoints; setdefault keeps any real
+# environment value.
+os.environ.setdefault("ADMIN_USERNAME", "admin")
+os.environ.setdefault("ADMIN_PASSWORD", "admin")
 
 repo_root = Path(__file__).resolve().parents[1]
 if str(repo_root) not in sys.path:

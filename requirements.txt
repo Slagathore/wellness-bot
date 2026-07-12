@@ -22,7 +22,7 @@ websockets>=13.0
 
 # --- Database & vector store -------------------------------------------------
 aiosqlite>=0.19.0
-sqlite-vec>=0.0.1a13       # fast vector search; may have native issues on Windows
+sqlite-vec==0.0.1a13       # fast vector search; pinned: newer releases drop the vec0 `vector(N)` column syntax this code uses
 duckdb>=0.9.2              # analytics queries
 numpy>=1.26.4              # numpy vector backend (pure-Python fallback)
 
