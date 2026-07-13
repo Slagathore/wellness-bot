@@ -6,8 +6,9 @@ from types import SimpleNamespace
 from app.db import db_rw
 from app.domain.turns.llm_analyzer import LLMTurnAnalyzer
 from app.utils.time_utils import operator_now
-from app.workers.nightly import _analyze_user_psychological_profile, reprocess_sentiments
-from app.workers.sentiments import process_batch
+from app.workers.nightly import (_analyze_user_psychological_profile, _nightly_model,
+                                 reprocess_sentiments)
+from app.workers.sentiments import _sentiment_model, process_batch
 
 
 def test_llm_turn_analyzer_prefers_planner_model(monkeypatch):
@@ -219,3 +220,38 @@ def test_nightly_profile_analysis_uses_nightly_model(test_user, monkeypatch):
 
     assert _analyze_user_psychological_profile(user_id, telegram_user_id, 25) is True
     assert captured["model"] == "kimi-k2.7-code:cloud"
+
+
+def test_every_model_role_can_be_configured_fully_local(monkeypatch):
+    """README/.env.example claim a fully local setup is achievable: chat, vision,
+    worker, planner, and nightly can each be pointed at a local Ollama model with
+    nothing silently falling back to a cloud tag. Guards against a regression
+    where a hardcoded cloud default sneaks back into one of the resolvers."""
+
+    local_settings = SimpleNamespace(
+        chat_model="llama3:latest",
+        vision_model="llava:latest",
+        worker_model="llama3:latest",
+        planner_model="llama3:latest",
+        turn_planner_model=None,
+        nightly_model="llama3:latest",
+        turn_planner_timeout_seconds=8.0,
+    )
+
+    monkeypatch.setattr("app.workers.nightly.settings", lambda: local_settings)
+    monkeypatch.setattr("app.workers.sentiments.settings", lambda: local_settings)
+    monkeypatch.setattr("app.domain.turns.llm_analyzer.settings", lambda: local_settings)
+
+    resolved = {
+        "chat": local_settings.chat_model,
+        "vision": local_settings.vision_model,
+        "nightly": _nightly_model(),
+        "sentiment": _sentiment_model(),
+        "planner": LLMTurnAnalyzer().resolve_model(),
+    }
+
+    for role, model in resolved.items():
+        assert model, f"{role} model resolved to nothing"
+        assert "cloud" not in model.lower(), (
+            f"{role} model unexpectedly resolved to a cloud tag: {model}"
+        )

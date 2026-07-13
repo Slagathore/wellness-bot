@@ -1,6 +1,36 @@
 # Mira, a self-hosted wellness bot
 
-Mira is an AI wellness companion you run yourself. It talks over Telegram, and optionally Discord, and does its thinking with local LLMs through [Ollama](https://ollama.com). Nothing has to touch a cloud service unless you decide it should.
+Mira is an AI wellness companion you run yourself. It talks over Telegram, and optionally Discord, and does its thinking through [Ollama](https://ollama.com). No cloud required: Mira is free and fully local capable, and nothing has to leave your machine. Model choice is yours, local or cloud, configurable per role.
+
+Read that last sentence carefully before you trust this with anything sensitive: three roles ship pointed at a cloud model by default, including the nightly job that builds psychological profiles from your conversations. See "Model defaults and what leaves your machine" right below for exactly what that means and how to turn it off.
+
+## Model defaults and what leaves your machine
+
+Chat, vision, the turn planner, and the nightly worker are each configured with their own model. Point all four at a local Ollama model and the whole thing runs offline: no conversation content leaves the machine, ever.
+
+Out of the box, three of those roles default to a cloud model instead:
+
+| Setting | Default | What it drives |
+| --- | --- | --- |
+| `VISION_MODEL` | `mistral-large-3:675b-cloud` | Reading photos you send the bot |
+| `PLANNER_MODEL` | `mistral-large-3:675b-cloud` | The turn planner (off by default, behind a feature flag) and the sentiment worker, which scores every message you send within seconds of you sending it |
+| `NIGHTLY_MODEL` | `kimi-k2.7-code:cloud` | The nightly psychological profiling job |
+
+`CHAT_MODEL`, the model that actually talks to you, defaults to a local model already. So do `EMBED_MODEL` and `WORKER_MODEL`. It's specifically vision, planner, and nightly that ship pointed at the cloud.
+
+The one to actually pay attention to: once someone has sent 20 or more messages, the nightly worker (`app/workers/nightly.py`, runs as `systemd/telegram-nightly.service`) takes their most recent messages, up to 50, and sends them to `NIGHTLY_MODEL` to build a psychological profile (mental health indicators, Big Five personality scores, the rest of it), then stores that profile in the database. This runs automatically, every night, for every active user. There's no flag to turn it off: it's on by default, and it's the most sensitive data category this app touches.
+
+The sentiment worker (`systemd/telegram-sentiments.service`) does something similar but continuously: every new message gets scored by `PLANNER_MODEL` within seconds of being sent, not just once a night.
+
+None of this is an oversight. Cloud models are bigger and give noticeably better profiling and planning output than what most people can run on their own hardware, so that's what ships by default. But if you want "nothing leaves your machine" to actually be true for you, set these in `.env`:
+
+```bash
+VISION_MODEL=llava:latest      # or any local Ollama vision model you've pulled
+PLANNER_MODEL=llama3:latest    # or any local Ollama model you've pulled
+NIGHTLY_MODEL=llama3:latest    # or any local Ollama model you've pulled
+```
+
+Pull the model first with `ollama pull <model>`. Once chat, vision, planner, and nightly all point at local models, nothing in a conversation, including the nightly profiling job, ever reaches a cloud service. See [`.env.example`](.env.example) for the commented out template and [`SECURITY.md`](SECURITY.md) for the rest of the threat model.
 
 ## What it does
 
@@ -121,8 +151,12 @@ Everything is configured through environment variables loaded from `.env`. See [
 | `ADMIN_PASSWORD` | Admin panel login password |
 | `DATA_ROOT` | Directory where all user data and databases are stored |
 | `DATABASE_PATH` | Full path to the SQLite database file |
-| `CHAT_MODEL` | Ollama model for conversations (e.g. `llama3:latest`) |
-| `EMBED_MODEL` | Ollama embedding model (e.g. `nomic-embed-text`) |
+| `CHAT_MODEL` | Ollama model for conversations (e.g. `llama3:latest`). Local by default. |
+| `WORKER_MODEL` | Background helper model (reminders, embedding prompt fixes). Falls back to `CHAT_MODEL`, so local, unless set. |
+| `VISION_MODEL` | Reads photos you send the bot. Defaults to a cloud model, `mistral-large-3:675b-cloud`. Set to a local Ollama vision model (e.g. `llava:latest`) to keep it on your machine. |
+| `PLANNER_MODEL` | Turn planner (flag gated, off by default) and the always on sentiment worker. Defaults to a cloud model, `mistral-large-3:675b-cloud`. |
+| `NIGHTLY_MODEL` | Nightly psychological profiling job. Defaults to a cloud model, `kimi-k2.7-code:cloud`. See "Model defaults and what leaves your machine" above. |
+| `EMBED_MODEL` | Ollama embedding model (e.g. `nomic-embed-text`). Local by default. |
 | `REDIS_URL` | Reserved, not currently used (the event bus runs in process). |
 
 Feature flags live in the `APP_FEATURE_FLAGS` JSON variable. Set a key to `false` to switch a feature off without touching the code.
@@ -208,7 +242,8 @@ wellness-bot/
 - The `wellness_data/` directory holds user PII (conversations, profiles). It is gitignored.
 - `ENABLE_DANGEROUS_TOOLS`, `ADMIN_DB_EDIT_ENABLED`, `ADMIN_LLM_CONSOLE_ENABLED`, and `ADMIN_OMNI_BROADCAST_ENABLED` all default to `false`. Only turn them on in environments you control.
 - Admin web panel auth: the FastAPI admin server (`app/interfaces/admin/server.py`) uses HTTP Basic against `ADMIN_USERNAME` and `ADMIN_PASSWORD`, compared in plaintext. Keep `.env` secret, and run the panel on loopback (the default is now `127.0.0.1`) behind a TLS reverse proxy if it has to be reachable remotely. The salted hash `AdminAuth` in `app/utils/security.py` (SHA-256, not bcrypt) currently guards only the desktop Tk control panel, not the web panel.
-- See [`docs/secrets.md`](docs/secrets.md) for credential rotation.
+- Vision, planner, and nightly default to a cloud model. See "Model defaults and what leaves your machine" above for what that sends off your machine and how to make it local.
+- See [`docs/secrets.md`](docs/secrets.md) for credential rotation and [`SECURITY.md`](SECURITY.md) for the full threat model.
 
 ## Contributing
 
