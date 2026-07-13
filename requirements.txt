@@ -5,13 +5,13 @@
 # =============================================================================
 
 # --- Core framework ----------------------------------------------------------
-fastapi>=0.118.2
-uvicorn>=0.24.0
-starlette>=0.27.0
+fastapi>=0.118.2,<1.0.0
+uvicorn>=0.24.0,<1.0.0
+starlette>=0.27.0,<1.0.0
 
 # --- Telegram / Discord ------------------------------------------------------
-python-telegram-bot>=22.5
-discord.py>=2.4.0
+python-telegram-bot>=22.5,<23.0.0
+discord.py>=2.4.0,<3.0.0
 
 # --- Async networking --------------------------------------------------------
 httpx>=0.25.2
@@ -30,8 +30,8 @@ numpy>=1.26.4              # numpy vector backend (pure-Python fallback)
 redis>=5.0.1
 
 # --- Configuration & validation ----------------------------------------------
-pydantic>=2.7.0
-pydantic-settings>=2.2.0
+pydantic>=2.7.0,<3.0.0
+pydantic-settings>=2.2.0,<3.0.0
 python-dotenv>=1.0.1
 
 # --- Task scheduling ---------------------------------------------------------
@@ -40,11 +40,13 @@ croniter>=2.0.1
 schedule>=1.2.0
 
 # --- LLM clients -------------------------------------------------------------
-ollama>=0.5.1              # Ollama local inference
-openai>=1.30.0             # OpenAI-compatible API client (used for cloud proxy)
+ollama>=0.5.1,<1.0.0       # Ollama local inference
+openai>=1.30.0             # declared for the OpenAI-compatible cloud proxy path; not currently imported anywhere in app/
 tiktoken>=0.7.0            # Token counting
 
-# --- LangChain (RAG pipeline) ------------------------------------------------
+# --- LangChain (RAG pipeline) -------------------------------------------------
+# Not currently imported anywhere in app/ (checked repo-wide). Kept declared in
+# case a future RAG path needs it; candidate for removal if it stays unused.
 langchain>=0.2.0
 langchain-core>=0.2.0
 langchain-community>=0.2.0
@@ -114,9 +116,11 @@ types-croniter>=2.0.0
 # =============================================================================
 
 # Perchance browser-based image backend (Cloudflare-bypassed via Playwright)
-# Requires: playwright install chromium  (after pip install)
-playwright>=1.45.0
-rebrowser-playwright>=1.45.0   # stealth mode for Cloudflare bypass
+# Not used: image generation is delegated to DungeonMaster (see below). Nothing
+# in app/ imports playwright. Uncomment only if you're reviving the Perchance
+# backend, then also run: playwright install chromium
+# playwright>=1.45.0
+# rebrowser-playwright>=1.45.0   # stealth mode for Cloudflare bypass
 
 # Image generation is delegated to the external DungeonMaster SDXL server
 # (see its own requirements). This process needs no torch/diffusers — it just
